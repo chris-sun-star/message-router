@@ -2,8 +2,8 @@ package db
 
 import (
 	"log"
-	"os"
 
+	"github.com/admin/message-router/internal/config"
 	"github.com/admin/message-router/internal/models"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -12,9 +12,9 @@ import (
 var DB *gorm.DB
 
 func InitDB() {
-	dsn := os.Getenv("DB_DSN")
+	dsn := config.AppConfig.Database.DSN
 	if dsn == "" {
-		log.Fatal("DB_DSN is not set")
+		log.Fatal("database.dsn is not set in config")
 	}
 
 	var err error

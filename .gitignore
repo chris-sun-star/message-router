@@ -1,5 +1,8 @@
 .env
+config.yaml
 node_modules
 dist
 build
 .venv
+backend/dist
+backend/main

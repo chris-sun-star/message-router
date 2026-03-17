@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/admin/message-router/internal/config"
 	"github.com/admin/message-router/internal/types"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -57,7 +57,8 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 		},
 	}
 
-	if proxyAddr := os.Getenv("ALL_PROXY"); proxyAddr != "" {
+	proxyAddr := config.AppConfig.Network.Proxy
+	if proxyAddr != "" {
 		dialer, err := proxy.SOCKS5("tcp", strings.TrimPrefix(proxyAddr, "socks5://"), nil, proxy.Direct)
 		if err == nil {
 			options.Resolver = dcs.Plain(dcs.PlainOptions{

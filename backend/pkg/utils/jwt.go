@@ -1,14 +1,14 @@
 package utils
 
 import (
-	"os"
 	"time"
 
+	"github.com/admin/message-router/internal/config"
 	"github.com/golang-jwt/jwt/v5"
 )
 
 func GenerateToken(userID uint) (string, error) {
-	secret := os.Getenv("JWT_SECRET")
+	secret := config.AppConfig.JWT.Secret
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"exp":     time.Now().Add(time.Hour * 72).Unix(),
@@ -19,7 +19,7 @@ func GenerateToken(userID uint) (string, error) {
 }
 
 func ValidateToken(tokenString string) (uint, error) {
-	secret := os.Getenv("JWT_SECRET")
+	secret := config.AppConfig.JWT.Secret
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return []byte(secret), nil
 	})

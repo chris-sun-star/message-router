@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"net/http"
-	"os"
 
+	"github.com/admin/message-router/internal/config"
 	"github.com/admin/message-router/internal/db"
 	"github.com/admin/message-router/internal/models"
 	"github.com/admin/message-router/pkg/utils"
@@ -24,7 +24,7 @@ func AddCredential(c *gin.Context) {
 		return
 	}
 
-	encryptionKey := os.Getenv("ENCRYPTION_KEY")
+	encryptionKey := config.AppConfig.Encryption.Key
 	encryptedToken, err := utils.Encrypt(req.Token, encryptionKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt token"})

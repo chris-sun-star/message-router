@@ -11,20 +11,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/admin/message-router/internal/config"
 	"github.com/admin/message-router/internal/core"
 	"github.com/admin/message-router/internal/db"
 	"github.com/admin/message-router/internal/handlers"
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 )
 
 //go:embed all:dist
 var frontendFS embed.FS
 
 func main() {
-	// Load .env if present
-	if err := godotenv.Load(".env"); err != nil {
-		log.Println("Warning: No .env file found, using environment variables")
+	// Load config
+	configPath := "config.yaml"
+	if os.Getenv("CONFIG_PATH") != "" {
+		configPath = os.Getenv("CONFIG_PATH")
+	}
+
+	if err := config.LoadConfig(configPath); err != nil {
+		log.Fatalf("Fatal: Could not load config file %s: %v", configPath, err)
 	}
 
 	// Initialize database
@@ -116,7 +121,7 @@ func main() {
 		http.ServeContent(c.Writer, c.Request, "index.html", time.Now(), indexFile.(io.ReadSeeker))
 	})
 
-	port := os.Getenv("PORT")
+	port := config.AppConfig.Server.Port
 	if port == "" {
 		port = "8080"
 	}

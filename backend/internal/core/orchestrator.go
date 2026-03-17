@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/admin/message-router/internal/adapters"
+	"github.com/admin/message-router/internal/config"
 	"github.com/admin/message-router/internal/db"
 	"github.com/admin/message-router/internal/models"
 	"github.com/admin/message-router/internal/types"
@@ -62,8 +62,9 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 		return
 	}
 
+	encryptionKey := config.AppConfig.Encryption.Key
 	// Decrypt source token
-	srcToken, err := utils.Decrypt(srcCred.EncryptedData, os.Getenv("ENCRYPTION_KEY"))
+	srcToken, err := utils.Decrypt(srcCred.EncryptedData, encryptionKey)
 	if err != nil {
 		log.Printf("Error decrypting source token for cred %d: %v", srcCred.ID, err)
 		return
@@ -116,7 +117,7 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 		}
 
 		// Decrypt API key
-		apiKey, err := utils.Decrypt(llmConfig.EncryptedKey, os.Getenv("ENCRYPTION_KEY"))
+		apiKey, err := utils.Decrypt(llmConfig.EncryptedKey, encryptionKey)
 		if err != nil {
 			log.Printf("Error decrypting LLM key for config %d: %v", llmConfig.ID, err)
 			return
@@ -146,7 +147,7 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 		return
 	}
 
-	destToken, err := utils.Decrypt(destCred.EncryptedData, os.Getenv("ENCRYPTION_KEY"))
+	destToken, err := utils.Decrypt(destCred.EncryptedData, encryptionKey)
 	if err != nil {
 		log.Printf("Error decrypting destination token for cred %d: %v", destCred.ID, err)
 		return
