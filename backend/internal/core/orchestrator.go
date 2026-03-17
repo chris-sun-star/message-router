@@ -160,7 +160,7 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 		return
 	}
 
-	log.Printf("Successfully processed subscription %d", sub.ID)
+	log.Printf("Successfully processed subscription %d for user %d", sub.ID, sub.UserID)
 	o.updateSyncTime(sub.ID)
 }
 
