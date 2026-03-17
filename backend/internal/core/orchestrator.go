@@ -54,6 +54,7 @@ func (o *Orchestrator) processSubscriptions(ctx context.Context) {
 
 func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subscription) {
 	log.Printf("Processing subscription %d for user %d", sub.ID, sub.UserID)
+	syncStartTime := time.Now()
 
 	// Fetch source credential
 	var srcCred models.Credential
@@ -102,7 +103,7 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 
 	if len(messages) == 0 {
 		log.Printf("No new messages for sub %d", sub.ID)
-		o.updateSyncTime(sub.ID)
+		o.updateSyncTime(sub.ID, syncStartTime)
 		return
 	}
 
@@ -161,9 +162,9 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 	}
 
 	log.Printf("Successfully processed subscription %d for user %d", sub.ID, sub.UserID)
-	o.updateSyncTime(sub.ID)
+	o.updateSyncTime(sub.ID, syncStartTime)
 }
 
-func (o *Orchestrator) updateSyncTime(subID uint) {
-	db.DB.Model(&models.Subscription{}).Where("id = ?", subID).Update("last_sync_at", time.Now())
+func (o *Orchestrator) updateSyncTime(subID uint, t time.Time) {
+	db.DB.Model(&models.Subscription{}).Where("id = ?", subID).Update("last_sync_at", t)
 }

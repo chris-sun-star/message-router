@@ -78,6 +78,15 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 	err := client.Run(ctx, func(ctx context.Context) error {
 		api := client.API()
 
+		// Get self ID to filter out outgoing messages
+		self, err := api.UsersGetMe(ctx)
+		var selfID int64
+		if err == nil {
+			if u, ok := self.AsNotEmpty(); ok {
+				selfID = u.GetID()
+			}
+		}
+
 		dialogs, err := api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
 			Limit:      100,
 			OffsetPeer: &tg.InputPeerEmpty{},
@@ -131,8 +140,16 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 					continue
 				}
 
+				// Filter out messages sent by the account itself
+				if from, ok := msgObj.GetFromID(); ok {
+					if p, ok := from.(*tg.PeerUser); ok && p.UserID == selfID {
+						continue
+					}
+				}
+
 				msgTime := time.Unix(int64(msgObj.Date), 0)
-				if msgTime.Before(since) {
+				// Use a small buffer (1s) to ensure we don't miss messages in the same second
+				if msgTime.Before(since.Add(-1 * time.Second)) {
 					continue
 				}
 
