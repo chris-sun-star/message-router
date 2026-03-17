@@ -79,6 +79,10 @@ func main() {
 			protected.GET("/credentials", handlers.ListCredentials)
 			protected.DELETE("/credentials/:id", handlers.DeleteCredential)
 
+			// Telegram Auth
+			protected.POST("/telegram/auth/send-code", handlers.SendTelegramCode)
+			protected.POST("/telegram/auth/verify-code", handlers.VerifyTelegramCode)
+
 			// Subscriptions
 			protected.POST("/subscriptions", handlers.CreateSubscription)
 			protected.GET("/subscriptions", handlers.ListSubscriptions)

@@ -12,11 +12,13 @@ const Channels = () => {
   // Form states
   const [channelName, setChannelName] = useState("");
   const [slackToken, setSlackToken] = useState("");
-  const [telegramID, setTelegramID] = useState("");
-  const [telegramHash, setTelegramHash] = useState("");
-  const [telegramSession, setTelegramSession] = useState("");
   const [larkToken, setLarkToken] = useState("");
   const [dingtalkWebhook, setDingtalkWebhook] = useState("");
+
+  // Telegram Auth Flow
+  const [telegramPhone, setTelegramPhone] = useState("");
+  const [telegramCode, setTelegramCode] = useState("");
+  const [telegramStep, setTelegramStep] = useState<"phone" | "code">("phone");
 
   const inputPlatforms = [
     { id: "slack", label: "Slack", icon: Slack, color: "text-purple-600", bg: "bg-purple-50" },
@@ -45,20 +47,73 @@ const Channels = () => {
 
   const openDrawer = () => {
     setChannelName("");
+    setTelegramPhone("");
+    setTelegramCode("");
+    setTelegramStep("phone");
     setActivePlatform(activeTab === "input" ? "slack" : "dingtalk");
     setIsDrawerOpen(true);
     setMessage(null);
   };
 
+  const handleTelegramSendCode = async () => {
+    setIsLoading(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/telegram/auth/send-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` },
+        body: JSON.stringify({ phone: telegramPhone }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to send code");
+      setTelegramStep("code");
+      setMessage({ type: 'success', text: "Verification code sent to your Telegram!" });
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleTelegramVerifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!channelName) {
+      setMessage({ type: 'error', text: "Please enter a display name first" });
+      return;
+    }
+    setIsLoading(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/telegram/auth/verify-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` },
+        body: JSON.stringify({ code: telegramCode, name: channelName }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to verify code");
+      setMessage({ type: 'success', text: "Telegram connected successfully!" });
+      fetchCredentials();
+      setTimeout(() => setIsDrawerOpen(false), 1500);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (activePlatform === "telegram") {
+      if (telegramStep === "phone") handleTelegramSendCode();
+      else handleTelegramVerifyCode(e);
+      return;
+    }
+
     setIsLoading(true);
     let tokenValue = "";
     if (activePlatform === "slack") tokenValue = slackToken;
     else if (activePlatform === "lark") tokenValue = larkToken;
-    else if (activePlatform === "telegram") {
-      tokenValue = JSON.stringify({ api_id: parseInt(telegramID), api_hash: telegramHash, session: telegramSession });
-    } else if (activePlatform === "dingtalk") tokenValue = dingtalkWebhook;
+    else if (activePlatform === "dingtalk") tokenValue = dingtalkWebhook;
 
     try {
       const response = await fetch("/api/credentials", {
@@ -232,21 +287,43 @@ const Channels = () => {
                     </div>
                   )}
                   {activePlatform === "telegram" && (
-                    <div className="space-y-5">
-                      <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                      {telegramStep === "phone" ? (
                         <div className="space-y-2">
-                          <label className="text-sm font-bold text-slate-700 ml-1">API ID</label>
-                          <input type="text" value={telegramID} onChange={e => setTelegramID(e.target.value)} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none" placeholder="12345" required />
+                          <label className="text-sm font-bold text-slate-700 ml-1">Phone Number</label>
+                          <input 
+                            type="tel" 
+                            value={telegramPhone} 
+                            onChange={e => setTelegramPhone(e.target.value)} 
+                            className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none" 
+                            placeholder="+1234567890" 
+                            required 
+                          />
+                          <p className="text-[11px] text-slate-400 ml-1">Include country code, e.g. +1 for USA</p>
                         </div>
+                      ) : (
                         <div className="space-y-2">
-                          <label className="text-sm font-bold text-slate-700 ml-1">API Hash</label>
-                          <input type="password" value={telegramHash} onChange={e => setTelegramHash(e.target.value)} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none" placeholder="abc12..." required />
+                          <div className="flex items-center justify-between ml-1">
+                            <label className="text-sm font-bold text-slate-700">Verification Code</label>
+                            <button 
+                              type="button" 
+                              onClick={() => setTelegramStep("phone")}
+                              className="text-xs text-blue-600 font-bold hover:underline"
+                            >
+                              Change Phone
+                            </button>
+                          </div>
+                          <input 
+                            type="text" 
+                            value={telegramCode} 
+                            onChange={e => setTelegramCode(e.target.value)} 
+                            className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none text-center text-2xl font-black tracking-[0.5em]" 
+                            placeholder="00000" 
+                            maxLength={5}
+                            required 
+                          />
                         </div>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-sm font-bold text-slate-700 ml-1">Session String</label>
-                        <textarea value={telegramSession} onChange={e => setTelegramSession(e.target.value)} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-3xl focus:ring-4 focus:ring-blue-100 outline-none h-32 font-mono text-[11px]" placeholder='{"DC":1,...}' required />
-                      </div>
+                      )}
                     </div>
                   )}
                   {activePlatform === "lark" && (
@@ -267,8 +344,15 @@ const Channels = () => {
                     disabled={isLoading}
                     className="w-full bg-slate-900 text-white font-black py-5 rounded-[32px] shadow-2xl flex items-center justify-center gap-3 active:scale-[0.98] transition-all disabled:opacity-70 mt-4"
                   >
-                    {isLoading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Save className="w-6 h-6" />}
-                    Save {activePlatform.toUpperCase()}
+                    {isLoading ? (
+                      <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <Save className="w-6 h-6" />
+                    )}
+                    {activePlatform === "telegram" 
+                      ? (telegramStep === "phone" ? "Send Verification Code" : "Verify & Save Telegram")
+                      : `Save ${activePlatform.toUpperCase()}`
+                    }
                   </button>
                 </form>
               </div>

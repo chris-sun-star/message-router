@@ -31,23 +31,9 @@ func NewTelegramAdapter(apiID int, apiHash string, session string) *TelegramAdap
 	}
 }
 
-func (t *TelegramAdapter) GetID() string {
-	return "telegram"
-}
-
-func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([]types.Message, error) {
-	var messages []types.Message
-
-	loader := &session.StorageMemory{}
-	
-	if t.session != "" {
-		if err := loader.StoreSession(ctx, []byte(t.session)); err != nil {
-			return nil, fmt.Errorf("failed to store session: %w", err)
-		}
-	}
-
+func NewTelegramClient(apiID int, apiHash string, storage session.Storage) *telegram.Client {
 	options := telegram.Options{
-		SessionStorage: loader,
+		SessionStorage: storage,
 		Device: telegram.DeviceConfig{
 			DeviceModel:    "Desktop",
 			SystemVersion:  "Windows 10",
@@ -69,7 +55,25 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 		}
 	}
 
-	client := telegram.NewClient(t.apiID, t.apiHash, options)
+	return telegram.NewClient(apiID, apiHash, options)
+}
+
+func (t *TelegramAdapter) GetID() string {
+	return "telegram"
+}
+
+func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([]types.Message, error) {
+	var messages []types.Message
+
+	loader := &session.StorageMemory{}
+
+	if t.session != "" {
+		if err := loader.StoreSession(ctx, []byte(t.session)); err != nil {
+			return nil, fmt.Errorf("failed to store session: %w", err)
+		}
+	}
+
+	client := NewTelegramClient(t.apiID, t.apiHash, loader)
 
 	err := client.Run(ctx, func(ctx context.Context) error {
 		api := client.API()
