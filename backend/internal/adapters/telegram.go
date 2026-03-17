@@ -78,12 +78,16 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 	err := client.Run(ctx, func(ctx context.Context) error {
 		api := client.API()
 
-		// Get self ID to filter out outgoing messages
+		// Get self info to filter out outgoing messages and detect mentions
 		self, err := api.UsersGetMe(ctx)
 		var selfID int64
+		var selfUsername string
 		if err == nil {
 			if u, ok := self.AsNotEmpty(); ok {
 				selfID = u.GetID()
+				if user, ok := u.(*tg.User); ok {
+					selfUsername = user.Username
+				}
 			}
 		}
 
@@ -102,6 +106,15 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 
 		for _, dialog := range list.GetDialogs() {
 			peer := dialog.GetPeer()
+			
+			// Detect if it's a group/channel
+			isGroup := false
+			if _, ok := peer.(*tg.PeerChat); ok {
+				isGroup = true
+			} else if _, ok := peer.(*tg.PeerChannel); ok {
+				isGroup = true
+			}
+
 			// Try to convert Peer to InputPeer
 			var inputPeer tg.InputPeerClass
 			if p, ok := peer.(*tg.PeerUser); ok {
@@ -140,9 +153,26 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 					continue
 				}
 
-				// Filter out messages sent by the account itself
+				// 1. Filter out messages sent by the account itself
 				if from, ok := msgObj.GetFromID(); ok {
 					if p, ok := from.(*tg.PeerUser); ok && p.UserID == selfID {
+						continue
+					}
+				}
+
+				// 2. Filter group messages without mentions
+				if isGroup {
+					mentioned := msgObj.Mentioned || msgObj.MediaUnread // MediaUnread can sometimes indicate a mention in some TG versions, but Mentioned is the primary flag
+					
+					// If not explicitly flagged as mentioned, check text for "@username"
+					if !mentioned && selfUsername != "" {
+						if strings.Contains(msgObj.Message, "@"+selfUsername) {
+							mentioned = true
+						}
+					}
+
+					// If still not mentioned and it's a group, ignore it
+					if !mentioned {
 						continue
 					}
 				}
