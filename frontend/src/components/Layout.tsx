@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { MessageSquareText, Layers, Radio, Bot, LogOut, User, ChevronDown } from "lucide-react";
+import { MessageSquareText, Layers, Radio, Bot, LogOut, ChevronDown } from "lucide-react";
 import { cn } from "../lib/utils";
 import { useState, useRef, useEffect } from "react";
 
