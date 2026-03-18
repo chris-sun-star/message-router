@@ -36,7 +36,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 	// 0. Get current user info for self-filtering
 	selfInfo, err := l.client.Authen.V1.UserInfo.Get(ctx, larkcore.WithUserAccessToken(l.token))
 	var selfID string
-	if err == nil && selfInfo.Success() {
+	if err == nil && selfInfo != nil && selfInfo.Success() && selfInfo.Data != nil && selfInfo.Data.UserId != nil {
 		selfID = *selfInfo.Data.UserId
 	}
 
@@ -49,11 +49,14 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		return nil, err
 	}
 
-	if !resp.Success() {
+	if !resp.Success() || resp.Data == nil || resp.Data.Items == nil {
 		return nil, fmt.Errorf("lark API error: %d %s", resp.Code, resp.Msg)
 	}
 
 	for _, item := range resp.Data.Items {
+		if item.ChatId == nil {
+			continue
+		}
 		// 2. Fetch messages for each chat
 		msgReq := larkim.NewListMessageReqBuilder().
 			ContainerIdType("chat").
@@ -62,17 +65,17 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			Build()
 
 		msgResp, err := l.client.Im.V1.Message.List(ctx, msgReq, larkcore.WithUserAccessToken(l.token))
-		if err != nil {
-			continue
-		}
-
-		if !msgResp.Success() {
+		if err != nil || !msgResp.Success() || msgResp.Data == nil || msgResp.Data.Items == nil {
 			continue
 		}
 
 		for _, msg := range msgResp.Data.Items {
 			// Skip self messages
-			if msg.Sender.Id != nil && *msg.Sender.Id == selfID {
+			if msg.Sender == nil || msg.Sender.Id == nil || *msg.Sender.Id == selfID {
+				continue
+			}
+
+			if msg.Body == nil || msg.Body.Content == nil {
 				continue
 			}
 
@@ -85,7 +88,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			content := contentObj.Text
 			
 			// Media detection
-			if *msg.MsgType != "text" {
+			if msg.MsgType != nil && *msg.MsgType != "text" {
 				mediaPlaceholder := fmt.Sprintf("[%s]", *msg.MsgType)
 				if content == "" {
 					content = mediaPlaceholder
@@ -94,16 +97,24 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 				}
 			}
 
+			if msg.CreateTime == nil || msg.MessageId == nil {
+				continue
+			}
 			ts, _ := strconv.ParseInt(*msg.CreateTime, 10, 64)
 			
+			chatName := ""
+			if item.Name != nil {
+				chatName = *item.Name
+			}
+
 			messages = append(messages, types.Message{
 				ID:        *msg.MessageId,
 				Source:    "lark",
 				Sender:    *msg.Sender.Id,
 				Content:   content,
 				Timestamp: time.UnixMilli(ts),
-				IsPrivate: false, // Defaulting to false, will investigate correct field later if needed
-				ChatName:  *item.Name,
+				IsPrivate: false, 
+				ChatName:  chatName,
 			})
 		}
 	}
@@ -127,10 +138,12 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			Build()
 		
 		userResp, err := l.client.Contact.V3.User.Batch(ctx, userReq, larkcore.WithUserAccessToken(l.token))
-		if err == nil && userResp.Success() {
+		if err == nil && userResp.Success() && userResp.Data != nil && userResp.Data.Items != nil {
 			nameMap := make(map[string]string)
 			for _, user := range userResp.Data.Items {
-				nameMap[*user.OpenId] = *user.Name
+				if user.OpenId != nil && user.Name != nil {
+					nameMap[*user.OpenId] = *user.Name
+				}
 			}
 
 			// Update names in messages
