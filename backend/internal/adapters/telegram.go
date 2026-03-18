@@ -299,11 +299,38 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 					continue
 				}
 
+				// Detect media
+				content := msgObj.Message
+				if msgObj.Media != nil {
+					mediaType := ""
+					switch msgObj.Media.(type) {
+					case *tg.MessageMediaPhoto:
+						mediaType = "[Photo]"
+					case *tg.MessageMediaDocument:
+						mediaType = "[File/Video/Audio]"
+					case *tg.MessageMediaGeo:
+						mediaType = "[Location]"
+					case *tg.MessageMediaContact:
+						mediaType = "[Contact]"
+					case *tg.MessageMediaDice:
+						mediaType = "[Dice]"
+					case *tg.MessageMediaPoll:
+						mediaType = "[Poll]"
+					default:
+						mediaType = "[Media]"
+					}
+					if content == "" {
+						content = mediaType
+					} else {
+						content = mediaType + " " + content
+					}
+				}
+
 				messages = append(messages, types.Message{
 					ID:        strconv.Itoa(msgObj.ID),
 					Source:    "telegram",
 					Sender:    senderName,
-					Content:   msgObj.Message,
+					Content:   content,
 					Timestamp: msgTime,
 					IsPrivate: !isGroup,
 					ChatName:  currentChatName,
