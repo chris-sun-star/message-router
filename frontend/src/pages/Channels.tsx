@@ -12,7 +12,6 @@ const Channels = () => {
   // Form states
   const [channelName, setChannelName] = useState("");
   const [slackToken, setSlackToken] = useState("");
-  const [larkToken, setLarkToken] = useState("");
   const [dingtalkWebhook, setDingtalkWebhook] = useState("");
 
   // Telegram Auth Flow
@@ -41,8 +40,69 @@ const Channels = () => {
     }
   };
 
+  const completeLarkAuth = async (code: string, name: string) => {
+    setIsLoading(true);
+    try {
+      const response = await fetch("/api/lark/auth/callback", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json", 
+          "Authorization": `Bearer ${localStorage.getItem("token")}` 
+        },
+        body: JSON.stringify({ code, name }),
+      });
+      if (!response.ok) throw new Error("Failed to connect Lark");
+      setMessage({ type: 'success', text: "Lark connected successfully!" });
+      fetchCredentials();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLarkAuth = async () => {
+    if (!channelName) {
+      setMessage({ type: 'error', text: "Please enter a display name first" });
+      return;
+    }
+    setIsLoading(true);
+    try {
+      // Save name to localStorage to recover after redirect
+      localStorage.setItem('lark_pending_name', channelName);
+      
+      const redirectUri = window.location.origin + window.location.pathname;
+      const response = await fetch(`/api/lark/auth/url?redirect_uri=${encodeURIComponent(redirectUri)}`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to get Lark auth URL");
+      
+      // Redirect to Lark
+      window.location.href = data.url;
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message });
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchCredentials();
+
+    // Handle Lark OAuth Callback
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const state = urlParams.get('state');
+    
+    if (code && state === 'lark-auth') {
+      const savedName = localStorage.getItem('lark_pending_name');
+      if (savedName) {
+        completeLarkAuth(code, savedName);
+        // Clear URL and storage
+        window.history.replaceState({}, document.title, window.location.pathname);
+        localStorage.removeItem('lark_pending_name');
+      }
+    }
   }, []);
 
   const openDrawer = () => {
@@ -112,7 +172,6 @@ const Channels = () => {
     setIsLoading(true);
     let tokenValue = "";
     if (activePlatform === "slack") tokenValue = slackToken;
-    else if (activePlatform === "lark") tokenValue = larkToken;
     else if (activePlatform === "dingtalk") tokenValue = dingtalkWebhook;
 
     try {
@@ -327,9 +386,25 @@ const Channels = () => {
                     </div>
                   )}
                   {activePlatform === "lark" && (
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Access Token</label>
-                      <input type="password" value={larkToken} onChange={e => setLarkToken(e.target.value)} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-3xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none" placeholder="u-..." required />
+                    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                      <div className="p-6 bg-emerald-50 rounded-[32px] border border-emerald-100 flex flex-col items-center text-center gap-4">
+                        <div className="bg-white p-4 rounded-2xl shadow-sm">
+                          <MessageSquare className="w-10 h-10 text-emerald-500" />
+                        </div>
+                        <div>
+                          <p className="font-bold text-emerald-900">Connect Lark Account</p>
+                          <p className="text-xs text-emerald-600 mt-1">You will be redirected to Lark to authorize this application.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleLarkAuth}
+                          disabled={isLoading}
+                          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 rounded-2xl shadow-lg shadow-emerald-100 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+                        >
+                          <Share2 className="w-5 h-5" />
+                          Authorize via Lark
+                        </button>
+                      </div>
                     </div>
                   )}
                   {activePlatform === "dingtalk" && (
@@ -342,7 +417,9 @@ const Channels = () => {
                   <button
                     type="submit"
                     disabled={isLoading}
-                    className="w-full bg-slate-900 text-white font-black py-5 rounded-[32px] shadow-2xl flex items-center justify-center gap-3 active:scale-[0.98] transition-all disabled:opacity-70 mt-4"
+                    className={`w-full text-white font-black py-5 rounded-[32px] shadow-2xl flex items-center justify-center gap-3 active:scale-[0.98] transition-all disabled:opacity-70 mt-4 ${
+                      activePlatform === 'lark' ? 'hidden' : 'bg-slate-900'
+                    }`}
                   >
                     {isLoading ? (
                       <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />

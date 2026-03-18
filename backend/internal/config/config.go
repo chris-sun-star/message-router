@@ -30,6 +30,10 @@ type Config struct {
 			APIID   int    `yaml:"api_id"`
 			APIHash string `yaml:"api_hash"`
 		} `yaml:"telegram"`
+		Lark struct {
+			AppID     string `yaml:"app_id"`
+			AppSecret string `yaml:"app_secret"`
+		} `yaml:"lark"`
 	} `yaml:"channels"`
 
 	Network struct {

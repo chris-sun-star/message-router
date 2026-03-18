@@ -83,6 +83,10 @@ func main() {
 			protected.POST("/telegram/auth/send-code", handlers.SendTelegramCode)
 			protected.POST("/telegram/auth/verify-code", handlers.VerifyTelegramCode)
 
+			// Lark Auth
+			protected.GET("/lark/auth/url", handlers.GetLarkAuthURL)
+			protected.POST("/lark/auth/callback", handlers.HandleLarkCallback)
+
 			// Subscriptions
 			protected.POST("/subscriptions", handlers.CreateSubscription)
 			protected.GET("/subscriptions", handlers.ListSubscriptions)
