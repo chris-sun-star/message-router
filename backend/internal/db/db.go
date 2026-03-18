@@ -18,6 +18,7 @@ func InitDB() {
 
 	if dbType == "" {
 		dbType = "mysql" // Default to mysql for backward compatibility
+		config.AppConfig.Database.Type = "mysql"
 	}
 
 	if dsn == "" {
