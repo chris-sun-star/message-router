@@ -175,7 +175,8 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 		}
 		source = adapters.NewTelegramAdapter(tData.APIID, tData.APIHash, tData.Session)
 	case models.SourceLark:
-		source = adapters.NewLarkAdapter(srcToken)
+		larkCfg := config.AppConfig.Channels.Lark
+		source = adapters.NewLarkAdapter(larkCfg.AppID, larkCfg.AppSecret, srcToken)
 	default:
 		log.Printf("Unknown source type %s", srcCred.SourceType)
 		return

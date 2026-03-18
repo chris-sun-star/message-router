@@ -19,9 +19,9 @@ type LarkAdapter struct {
 	token  string
 }
 
-func NewLarkAdapter(token string) *LarkAdapter {
+func NewLarkAdapter(appID, appSecret, token string) *LarkAdapter {
 	return &LarkAdapter{
-		client: lark.NewClient("", ""),
+		client: lark.NewClient(appID, appSecret),
 		token:  token,
 	}
 }
