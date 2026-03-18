@@ -13,7 +13,8 @@ type Config struct {
 	} `yaml:"server"`
 
 	Database struct {
-		DSN string `yaml:"dsn"`
+		Type string `yaml:"type"` // mysql or sqlite
+		DSN  string `yaml:"dsn"`
 	} `yaml:"database"`
 
 	JWT struct {

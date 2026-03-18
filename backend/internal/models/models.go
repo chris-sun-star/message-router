@@ -57,8 +57,11 @@ type Subscription struct {
 	LLMConfigID             *uint          `json:"llm_config_id"`
 	LastSyncAt              time.Time      `json:"last_sync_at"`
 	SyncInterval            int            `gorm:"default:300" json:"sync_interval"`
-	IsActive                bool           `gorm:"default:true" json:"is_active"`
+	IsActive                bool           `gorm:"default:false" json:"is_active"`
+	LockedUntil             *time.Time     `json:"locked_until,omitempty"`
+	LockedBy                string         `gorm:"size:100" json:"locked_by,omitempty"`
 	CreatedAt               time.Time      `json:"created_at"`
+
 	UpdatedAt               time.Time      `json:"updated_at"`
 	DeletedAt               gorm.DeletedAt `gorm:"index" json:"-"`
 }

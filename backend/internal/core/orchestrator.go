@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -16,16 +17,40 @@ import (
 	"github.com/admin/message-router/pkg/utils"
 )
 
+const (
+	BatchSize    = 10
+	LockDuration = 5 * time.Minute
+	WorkerCount  = 8
+)
+
 type Orchestrator struct {
+	InstanceID string
+	taskChan   chan models.Subscription
 }
 
 func NewOrchestrator() *Orchestrator {
-	return &Orchestrator{}
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "unknown"
+	}
+	instanceID := fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano())
+	return &Orchestrator{
+		InstanceID: instanceID,
+		taskChan:   make(chan models.Subscription, BatchSize*2),
+	}
 }
 
 func (o *Orchestrator) Start(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Minute)
+	// Start worker pool
+	for i := 0; i < WorkerCount; i++ {
+		go o.worker(ctx)
+	}
+
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+
+	// Initial check
+	o.processSubscriptions(ctx)
 
 	for {
 		select {
@@ -37,19 +62,77 @@ func (o *Orchestrator) Start(ctx context.Context) {
 	}
 }
 
-func (o *Orchestrator) processSubscriptions(ctx context.Context) {
-	var subs []models.Subscription
-	if err := db.DB.Where("is_active = ?", true).Find(&subs).Error; err != nil {
-		log.Println("Error fetching subscriptions:", err)
-		return
-	}
-
-	for _, sub := range subs {
-		if time.Since(sub.LastSyncAt).Seconds() < float64(sub.SyncInterval) {
-			continue
+func (o *Orchestrator) worker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case sub, ok := <-o.taskChan:
+			if !ok {
+				return
+			}
+			o.processSubscription(ctx, sub)
 		}
-		go o.processSubscription(ctx, sub)
 	}
+}
+
+func (o *Orchestrator) processSubscriptions(ctx context.Context) {
+	for {
+		var candidates []models.Subscription
+		now := time.Now()
+
+		dbType := config.AppConfig.Database.Type
+		query := db.DB.Where("is_active = ? AND (locked_until IS NULL OR locked_until < ?)", true, now)
+
+		if dbType == "mysql" {
+			query = query.Where("DATE_ADD(last_sync_at, INTERVAL sync_interval SECOND) <= ?", now)
+		} else {
+			// SQLite
+			query = query.Where("datetime(last_sync_at, '+' || sync_interval || ' seconds') <= datetime(?)", now.Format("2006-01-02 15:04:05"))
+		}
+
+		if err := query.Limit(BatchSize).Find(&candidates).Error; err != nil {
+			log.Println("Error fetching subscription candidates:", err)
+			break
+		}
+
+		for _, sub := range candidates {
+			if o.claimSubscription(sub.ID) {
+				// Send to worker pool
+				select {
+				case o.taskChan <- sub:
+				default:
+					// If channel is full, we've reached our local capacity
+					// The lock will eventually expire or be picked up by another instance
+					log.Printf("Worker pool full, skipping sub %d for now", sub.ID)
+				}
+			}
+		}
+
+		numCandidates := len(candidates)
+		// If the DB returned fewer than the BatchSize, we've exhausted the current "due" tasks
+		if numCandidates < BatchSize {
+			break
+		}
+
+		// Small delay to prevent tight loop and allow other instances to grab tasks
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func (o *Orchestrator) claimSubscription(subID uint) bool {
+	now := time.Now()
+	lockedUntil := now.Add(LockDuration)
+
+	// Atomic update to claim the subscription
+	result := db.DB.Model(&models.Subscription{}).
+		Where("id = ? AND (locked_until IS NULL OR locked_until < ?)", subID, now).
+		Updates(map[string]interface{}{
+			"locked_until": lockedUntil,
+			"locked_by":    o.InstanceID,
+		})
+
+	return result.RowsAffected > 0
 }
 
 func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subscription) {
@@ -178,5 +261,9 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 }
 
 func (o *Orchestrator) updateSyncTime(subID uint, t time.Time) {
-	db.DB.Model(&models.Subscription{}).Where("id = ?", subID).Update("last_sync_at", t)
+	db.DB.Model(&models.Subscription{}).Where("id = ?", subID).Updates(map[string]interface{}{
+		"last_sync_at": t,
+		"locked_until": nil,
+		"locked_by":    "",
+	})
 }
