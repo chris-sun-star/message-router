@@ -53,7 +53,7 @@ type Subscription struct {
 	UserID                  uint           `gorm:"not null;index" json:"user_id"`
 	SourceCredentialID      uint           `gorm:"not null" json:"source_credential_id"`
 	DestinationCredentialID uint           `gorm:"not null" json:"destination_credential_id"`
-	EnableSummarization     bool           `gorm:"default:true" json:"enable_summarization"`
+	EnableSummarization     bool           `gorm:"default:false" json:"enable_summarization"`
 	LLMConfigID             *uint          `json:"llm_config_id"`
 	LastSyncAt              time.Time      `json:"last_sync_at"`
 	SyncInterval            int            `gorm:"default:300" json:"sync_interval"`

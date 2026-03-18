@@ -62,6 +62,30 @@ func (t *TelegramAdapter) GetID() string {
 	return "telegram"
 }
 
+func (t *TelegramAdapter) updateNameMaps(users []tg.UserClass, chats []tg.ChatClass, userNames map[int64]string, chatNames map[int64]string) {
+	for _, u := range users {
+		if user, ok := u.AsNotEmpty(); ok {
+			if user.FirstName != "" || user.LastName != "" {
+				userNames[user.ID] = strings.TrimSpace(user.FirstName + " " + user.LastName)
+			} else if user.Username != "" {
+				userNames[user.ID] = user.Username
+			} else {
+				userNames[user.ID] = strconv.FormatInt(user.ID, 10)
+			}
+		}
+	}
+	for _, c := range chats {
+		if chat, ok := c.AsNotEmpty(); ok {
+			switch ch := chat.(type) {
+			case *tg.Chat:
+				chatNames[ch.ID] = ch.Title
+			case *tg.Channel:
+				chatNames[ch.ID] = ch.Title
+			}
+		}
+	}
+}
+
 func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([]types.Message, error) {
 	var messages []types.Message
 
@@ -78,17 +102,15 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 	err := client.Run(ctx, func(ctx context.Context) error {
 		api := client.API()
 
-		// Get self info to filter out outgoing messages and detect mentions
-		self, err := api.UsersGetMe(ctx)
+		// Get self info
+		self, err := client.Self(ctx)
 		var selfID int64
 		var selfUsername string
 		if err == nil {
-			if u, ok := self.AsNotEmpty(); ok {
-				selfID = u.GetID()
-				if user, ok := u.(*tg.User); ok {
-					selfUsername = user.Username
-				}
-			}
+			selfID = self.ID
+			selfUsername = self.Username
+		} else {
+			return fmt.Errorf("failed to get self info: %w", err)
 		}
 
 		dialogs, err := api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
@@ -96,7 +118,7 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 			OffsetPeer: &tg.InputPeerEmpty{},
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get dialogs: %w", err)
 		}
 
 		list, ok := dialogs.AsModified()
@@ -104,15 +126,58 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 			return fmt.Errorf("could not get dialogs")
 		}
 
+		// Pre-populate name maps from dialogs
+		userNames := make(map[int64]string)
+		for _, u := range list.GetUsers() {
+			user, ok := u.AsNotEmpty()
+			if !ok {
+				continue
+			}
+			// user is already *tg.User since AsNotEmpty() returns it
+			if user.FirstName != "" || user.LastName != "" {
+				userNames[user.ID] = strings.TrimSpace(user.FirstName + " " + user.LastName)
+			} else if user.Username != "" {
+				userNames[user.ID] = user.Username
+			} else {
+				userNames[user.ID] = strconv.FormatInt(user.ID, 10)
+			}
+		}
+
+		chatNames := make(map[int64]string)
+		for _, c := range list.GetChats() {
+			if chat, ok := c.AsNotEmpty(); ok {
+				switch ch := chat.(type) {
+				case *tg.Chat:
+					chatNames[ch.ID] = ch.Title
+				case *tg.Channel:
+					chatNames[ch.ID] = ch.Title
+				case *tg.ChatForbidden:
+					chatNames[ch.ID] = ch.Title
+				case *tg.ChannelForbidden:
+					chatNames[ch.ID] = ch.Title
+				}
+			}
+		}
+
 		for _, dialog := range list.GetDialogs() {
 			peer := dialog.GetPeer()
 			
-			// Detect if it's a group/channel
+			// Detect if it's a group/channel and resolve chat name
 			isGroup := false
-			if _, ok := peer.(*tg.PeerChat); ok {
+			currentChatName := ""
+			
+			if p, ok := peer.(*tg.PeerChat); ok {
 				isGroup = true
-			} else if _, ok := peer.(*tg.PeerChannel); ok {
+				currentChatName = chatNames[p.ChatID]
+			} else if p, ok := peer.(*tg.PeerChannel); ok {
 				isGroup = true
+				currentChatName = chatNames[p.ChannelID]
+			} else if p, ok := peer.(*tg.PeerUser); ok {
+				currentChatName = userNames[p.UserID]
+			}
+
+			if currentChatName == "" {
+				currentChatName = "Unknown"
 			}
 
 			// Try to convert Peer to InputPeer
@@ -137,6 +202,16 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 				continue
 			}
 
+			// Update name maps with users/chats from history for better resolution
+			switch h := history.(type) {
+			case *tg.MessagesMessages:
+				t.updateNameMaps(h.Users, h.Chats, userNames, chatNames)
+			case *tg.MessagesMessagesSlice:
+				t.updateNameMaps(h.Users, h.Chats, userNames, chatNames)
+			case *tg.MessagesChannelMessages:
+				t.updateNameMaps(h.Users, h.Chats, userNames, chatNames)
+			}
+
 			msgs, ok := history.AsModified()
 			if !ok {
 				continue
@@ -153,21 +228,62 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 					continue
 				}
 
-				// 1. Filter out messages sent by the account itself
+				// 1. Filter out messages sent by the account itself using Out flag
+				if msgObj.Out {
+					continue
+				}
+
+				senderName := "Unknown"
 				if from, ok := msgObj.GetFromID(); ok {
-					if p, ok := from.(*tg.PeerUser); ok && p.UserID == selfID {
-						continue
+					if p, ok := from.(*tg.PeerUser); ok {
+						senderName = userNames[p.UserID]
+						if senderName == "" {
+							senderName = strconv.FormatInt(p.UserID, 10)
+						}
 					}
+				}
+
+				// Fallback for DMs if senderName is still unknown
+				if senderName == "Unknown" && !isGroup {
+					senderName = currentChatName
 				}
 
 				// 2. Filter group messages without mentions
 				if isGroup {
-					mentioned := msgObj.Mentioned || msgObj.MediaUnread // MediaUnread can sometimes indicate a mention in some TG versions, but Mentioned is the primary flag
+					mentioned := msgObj.Mentioned || msgObj.MediaUnread
 					
-					// If not explicitly flagged as mentioned, check text for "@username"
+					// If not explicitly flagged as mentioned, check text for "@username" (case-insensitive)
 					if !mentioned && selfUsername != "" {
-						if strings.Contains(msgObj.Message, "@"+selfUsername) {
+						if strings.Contains(strings.ToLower(msgObj.Message), "@"+strings.ToLower(selfUsername)) {
 							mentioned = true
+						}
+					}
+
+					// If still not mentioned, check entities (just in case)
+					if !mentioned {
+						for _, ent := range msgObj.Entities {
+							switch e := ent.(type) {
+							case *tg.MessageEntityMention:
+								// The mention entity doesn't contain the username itself, it just marks where it is in the text
+								// We already checked the text above, but let's double check the specific mention
+								start := e.Offset
+								end := e.Offset + e.Length
+								if start >= 0 && end <= len(msgObj.Message) {
+									mentionText := strings.ToLower(msgObj.Message[start:end])
+									if mentionText == "@"+strings.ToLower(selfUsername) {
+										mentioned = true
+										break
+									}
+								}
+							case *tg.MessageEntityMentionName:
+								if e.UserID == selfID {
+									mentioned = true
+									break
+								}
+							}
+							if mentioned {
+								break
+							}
 						}
 					}
 
@@ -186,10 +302,11 @@ func (t *TelegramAdapter) FetchMessages(ctx context.Context, since time.Time) ([
 				messages = append(messages, types.Message{
 					ID:        strconv.Itoa(msgObj.ID),
 					Source:    "telegram",
-					Sender:    fmt.Sprintf("%v", msgObj.FromID),
+					Sender:    senderName,
 					Content:   msgObj.Message,
 					Timestamp: msgTime,
-					ChatName:  fmt.Sprintf("%v", peer),
+					IsPrivate: !isGroup,
+					ChatName:  currentChatName,
 				})
 			}
 		}

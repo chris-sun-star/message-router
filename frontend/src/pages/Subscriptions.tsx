@@ -12,7 +12,7 @@ const Subscriptions = () => {
   // New Subscription Form states
   const [selectedSource, setSelectedSource] = useState("");
   const [selectedDest, setSelectedDest] = useState("");
-  const [enableSummarization, setEnableSummarization] = useState(true);
+  const [enableSummarization, setEnableSummarization] = useState(false);
   const [selectedLLM, setSelectedLLM] = useState("");
   const [syncInterval, setSyncInterval] = useState(300);
 

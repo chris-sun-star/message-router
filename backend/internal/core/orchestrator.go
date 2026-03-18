@@ -53,6 +53,10 @@ func (o *Orchestrator) processSubscriptions(ctx context.Context) {
 }
 
 func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subscription) {
+	// Create a sub-context with timeout for this specific sync task
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	log.Printf("Processing subscription %d for user %d", sub.ID, sub.UserID)
 	syncStartTime := time.Now()
 
@@ -136,7 +140,15 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 		var sb strings.Builder
 		sb.WriteString("### New Messages List\n\n")
 		for _, m := range messages {
-			sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Sender, m.Source, m.Content))
+			if m.Source == "telegram" {
+				if m.IsPrivate {
+					sb.WriteString(fmt.Sprintf("- **%s** said: %s\n", m.Sender, m.Content))
+				} else {
+					sb.WriteString(fmt.Sprintf("- **%s** mentioned you in group **%s**: %s\n", m.Sender, m.ChatName, m.Content))
+				}
+			} else {
+				sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Sender, m.Source, m.Content))
+			}
 		}
 		finalContent = sb.String()
 	}
