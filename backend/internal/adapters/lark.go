@@ -179,6 +179,9 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		var s struct { UserId string `json:"user_id"` }
 		json.Unmarshal(selfData, &s)
 		selfID = s.UserId
+		fmt.Printf("Lark: Authenticated as user ID %s\n", selfID)
+	} else {
+		fmt.Printf("Lark: UserInfo error: %v\n", err)
 	}
 
 	// 1. Fetch Groups
@@ -191,10 +194,13 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			} `json:"items"` 
 		}
 		json.Unmarshal(groupData, &g)
+		fmt.Printf("Lark: Found %d group chats\n", len(g.Items))
 		for _, item := range g.Items {
 			msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, selfID, since)
 			messages = append(messages, msgs...)
 		}
+	} else {
+		fmt.Printf("Lark: Chat.List error: %v\n", err)
 	}
 
 	// 2. Fetch P2P via Contacts
@@ -207,6 +213,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			} `json:"items"` 
 		}
 		json.Unmarshal(contactData, &c)
+		fmt.Printf("Lark: Found %d contacts\n", len(c.Items))
 		for _, user := range c.Items {
 			if user.OpenId == "" || user.OpenId == selfID { continue }
 			
@@ -218,11 +225,16 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 				var p struct { ChatId string `json:"chat_id"` }
 				json.Unmarshal(p2pData, &p)
 				if p.ChatId != "" {
+					fmt.Printf("Lark: Fetching from P2P chat with %s (%s)\n", user.Name, p.ChatId)
 					msgs := l.fetchFromChat(ctx, p.ChatId, user.Name, true, selfID, since)
 					messages = append(messages, msgs...)
 				}
+			} else {
+				fmt.Printf("Lark: CreateChat error for contact %s: %v\n", user.Name, err)
 			}
 		}
+	} else {
+		fmt.Printf("Lark: User.List error: %v\n", err)
 	}
 
 	// Resolve Names
@@ -256,6 +268,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 }
 
 func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, selfID string, since time.Time) []types.Message {
+	fmt.Printf("Lark: Fetching messages for chat %s (ID: %s) since %s\n", chatName, chatID, since.Format(time.RFC3339))
 	query := url.Values{
 		"container_id_type": {"chat"},
 		"container_id":      {chatID},
@@ -264,6 +277,7 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 	
 	msgData, err := l.rawRequest(ctx, "GET", "im/v1/messages", nil, query)
 	if err != nil {
+		fmt.Printf("Lark: Message.List error for %s: %v\n", chatID, err)
 		return nil
 	}
 
@@ -277,6 +291,10 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 		} `json:"items"`
 	}
 	json.Unmarshal(msgData, &m)
+
+	if len(m.Items) > 0 {
+		fmt.Printf("Lark: Found %d raw messages in chat %s\n", len(m.Items), chatName)
+	}
 
 	var results []types.Message
 	for _, msg := range m.Items {
