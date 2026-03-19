@@ -136,29 +136,40 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 	var selfID string
 	if err == nil && selfInfo != nil && selfInfo.Success() && selfInfo.Data != nil && selfInfo.Data.UserId != nil {
 		selfID = *selfInfo.Data.UserId
+		fmt.Printf("Lark: Authenticated as user ID %s\n", selfID)
+	} else if err != nil {
+		fmt.Printf("Lark: UserInfo error: %v\n", err)
 	}
 
 	// 1. Fetch Group Chats
 	req := larkim.NewListChatReqBuilder().Build()
 	resp, err := l.client.Im.V1.Chat.List(ctx, req, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
 	if err == nil && resp.Success() && resp.Data != nil && resp.Data.Items != nil {
+		fmt.Printf("Lark: Found %d group chats\n", len(resp.Data.Items))
 		for _, item := range resp.Data.Items {
 			if item.ChatId == nil { continue }
 			name := "Group"
 			if item.Name != nil { name = *item.Name }
+			fmt.Printf("Lark: Processing group chat: %s (%s)\n", name, *item.ChatId)
 			msgs := l.fetchFromChat(ctx, *item.ChatId, name, false, selfID, since)
 			messages = append(messages, msgs...)
 		}
+	} else if err != nil {
+		fmt.Printf("Lark: Chat.List error: %v\n", err)
 	}
 
-	// 2. Fetch P2P Chats via Contact List (Workaround for Lark not listing P2P chats)
+	// 2. Fetch P2P Chats via Contact List
 	userReq := larkcontact.NewListUserReqBuilder().DepartmentId("0").Build()
 	userResp, err := l.client.Contact.V3.User.List(ctx, userReq, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
 	if err == nil && userResp.Success() && userResp.Data != nil && userResp.Data.Items != nil {
+		fmt.Printf("Lark: Found %d users in contacts\n", len(userResp.Data.Items))
 		for _, user := range userResp.Data.Items {
 			if user.OpenId == nil || *user.OpenId == "" { continue }
+			if user.Name != nil {
+				fmt.Printf("Lark: Resolving P2P chat for contact: %s (%s)\n", *user.Name, *user.OpenId)
+			}
 			
-			// Get or Create P2P Chat ID (idempotent)
+			// Get or Create P2P Chat ID
 			p2pReq := larkim.NewCreateChatReqBuilder().
 				UserIdType("open_id").
 				Body(larkim.NewCreateChatReqBodyBuilder().
@@ -170,10 +181,15 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			if err == nil && p2pResp.Success() && p2pResp.Data != nil && p2pResp.Data.ChatId != nil {
 				userName := "Private"
 				if user.Name != nil { userName = *user.Name }
+				fmt.Printf("Lark: Fetching from P2P chat with %s (ID: %s)\n", userName, *p2pResp.Data.ChatId)
 				msgs := l.fetchFromChat(ctx, *p2pResp.Data.ChatId, userName, true, selfID, since)
 				messages = append(messages, msgs...)
+			} else if err != nil {
+				fmt.Printf("Lark: CreateChat error for %s: %v\n", *user.OpenId, err)
 			}
 		}
+	} else if err != nil {
+		fmt.Printf("Lark: User.List error: %v\n", err)
 	}
 
 	// Resolve Sender Names
@@ -195,15 +211,27 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 
 func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, selfID string, since time.Time) []types.Message {
 	var results []types.Message
+	startTime := strconv.FormatInt(since.UnixMilli()+1, 10)
+	fmt.Printf("Lark: Fetching messages for chat %s (ID: %s) since %s\n", chatName, chatID, since.Format(time.RFC3339))
+	
 	msgReq := larkim.NewListMessageReqBuilder().
 		ContainerIdType("chat").
 		ContainerId(chatID).
-		StartTime(strconv.FormatInt(since.UnixMilli()+1, 10)).
+		StartTime(startTime).
 		Build()
 
 	msgResp, err := l.client.Im.V1.Message.List(ctx, msgReq, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
-	if err != nil || !msgResp.Success() || msgResp.Data == nil || msgResp.Data.Items == nil {
+	if err != nil {
+		fmt.Printf("Lark: Message.List error for %s: %v\n", chatID, err)
 		return nil
+	}
+	if !msgResp.Success() {
+		fmt.Printf("Lark: Message.List failed for %s: %d %s\n", chatID, msgResp.Code, msgResp.Msg)
+		return nil
+	}
+
+	if msgResp.Data != nil && msgResp.Data.Items != nil && len(msgResp.Data.Items) > 0 {
+		fmt.Printf("Lark: Found %d raw messages in chat %s\n", len(msgResp.Data.Items), chatName)
 	}
 
 	for _, msg := range msgResp.Data.Items {
