@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -88,11 +89,17 @@ func (l *LarkAdapter) rawRequest(ctx context.Context, method, path string, body 
 		Data json.RawMessage `json:"data"`
 	}
 
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	// Restore body for decoder
+	resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Printf("Lark DEBUG: Failed to decode response: %s\n", string(bodyBytes))
 		return nil, err
 	}
 
 	if result.Code != 0 {
+		fmt.Printf("Lark DEBUG ERROR: Path: %s, Response: %s\n", path, string(bodyBytes))
 		return nil, fmt.Errorf("lark error: %d %s", result.Code, result.Msg)
 	}
 
