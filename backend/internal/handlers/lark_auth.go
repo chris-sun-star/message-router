@@ -61,6 +61,7 @@ type LarkTokenResponse struct {
 		ExpiresIn        int    `json:"expires_in"`
 		RefreshToken     string `json:"refresh_token"`
 		RefreshExpiresIn int    `json:"refresh_expires_in"`
+		Scope            string `json:"scope"`
 		Name             string `json:"name"`
 		EnName           string `json:"en_name"`
 		AvatarUrl        string `json:"avatar_url"`
@@ -119,6 +120,8 @@ func HandleLarkCallback(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Lark error: %s", larkResp.Msg)})
 		return
 	}
+
+	fmt.Printf("Lark OAuth Success! Scopes granted: %s\n", larkResp.Data.Scope)
 
 	// Prepare token data JSON
 	tokenData := struct {
