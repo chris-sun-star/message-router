@@ -6,14 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
 	"github.com/admin/message-router/internal/types"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
-	larkcontact "github.com/larksuite/oapi-sdk-go/v3/service/contact/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
-	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 type LarkTokenData struct {
@@ -54,21 +53,64 @@ func (l *LarkAdapter) GetID() string {
 	return "lark"
 }
 
+func (l *LarkAdapter) rawRequest(ctx context.Context, method, path string, body interface{}, query url.Values) (json.RawMessage, error) {
+	fullURL := fmt.Sprintf("%s/open-apis/%s", l.baseURL, path)
+	if len(query) > 0 {
+		fullURL += "?" + query.Encode()
+	}
+
+	var bodyReader *bytes.Buffer
+	if body != nil {
+		jsonBody, _ := json.Marshal(body)
+		bodyReader = bytes.NewBuffer(jsonBody)
+	} else {
+		bodyReader = bytes.NewBuffer([]byte{})
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+l.tokenData.AccessToken)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Code int             `json:"code"`
+		Msg  string          `json:"msg"`
+		Data json.RawMessage `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("lark error: %d %s", result.Code, result.Msg)
+	}
+
+	return result.Data, nil
+}
+
 func (l *LarkAdapter) refreshToken(ctx context.Context) error {
 	if l.tokenData.RefreshToken == "" {
 		return fmt.Errorf("no refresh token available")
 	}
 
-	url := fmt.Sprintf("%s/open-apis/authen/v1/refresh_access_token", l.baseURL)
+	refreshURL := fmt.Sprintf("%s/open-apis/authen/v1/refresh_access_token", l.baseURL)
 	appTokenResp, err := l.client.GetAppAccessTokenBySelfBuiltApp(ctx, &larkcore.SelfBuiltAppAccessTokenReq{
 		AppID:     l.appID,
 		AppSecret: l.appSecret,
 	})
 	if err != nil {
 		return err
-	}
-	if !appTokenResp.Success() {
-		return fmt.Errorf("failed to get app_access_token: %d %s", appTokenResp.Code, appTokenResp.Msg)
 	}
 
 	payload := map[string]string{
@@ -77,7 +119,7 @@ func (l *LarkAdapter) refreshToken(ctx context.Context) error {
 	}
 	
 	jsonData, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", refreshURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return err
 	}
@@ -125,83 +167,87 @@ func (l *LarkAdapter) refreshToken(ctx context.Context) error {
 
 func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]types.Message, error) {
 	if l.tokenData.RefreshToken != "" && time.Now().Add(10 * time.Minute).After(l.tokenData.ExpiresAt) {
-		if err := l.refreshToken(ctx); err != nil {
-			fmt.Printf("Warning: failed to refresh Lark token: %v\n", err)
-		}
+		l.refreshToken(ctx)
 	}
 
 	var messages []types.Message
 
-	selfInfo, err := l.client.Authen.V1.UserInfo.Get(ctx, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
+	// 0. Get self ID
+	selfData, err := l.rawRequest(ctx, "GET", "authen/v1/user_info", nil, nil)
 	var selfID string
-	if err == nil && selfInfo != nil && selfInfo.Success() && selfInfo.Data != nil && selfInfo.Data.UserId != nil {
-		selfID = *selfInfo.Data.UserId
-		fmt.Printf("Lark: Authenticated as user ID %s\n", selfID)
-	} else if err != nil {
-		fmt.Printf("Lark: UserInfo error: %v\n", err)
+	if err == nil {
+		var s struct { UserId string `json:"user_id"` }
+		json.Unmarshal(selfData, &s)
+		selfID = s.UserId
 	}
 
-	// 1. Fetch Group Chats
-	req := larkim.NewListChatReqBuilder().Build()
-	resp, err := l.client.Im.V1.Chat.List(ctx, req, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
-	if err == nil && resp.Success() && resp.Data != nil && resp.Data.Items != nil {
-		fmt.Printf("Lark: Found %d group chats\n", len(resp.Data.Items))
-		for _, item := range resp.Data.Items {
-			if item.ChatId == nil { continue }
-			name := "Group"
-			if item.Name != nil { name = *item.Name }
-			fmt.Printf("Lark: Processing group chat: %s (%s)\n", name, *item.ChatId)
-			msgs := l.fetchFromChat(ctx, *item.ChatId, name, false, selfID, since)
+	// 1. Fetch Groups
+	groupData, err := l.rawRequest(ctx, "GET", "im/v1/chats", nil, nil)
+	if err == nil {
+		var g struct { 
+			Items []struct { 
+				ChatId string `json:"chat_id"` 
+				Name string `json:"name"` 
+			} `json:"items"` 
+		}
+		json.Unmarshal(groupData, &g)
+		for _, item := range g.Items {
+			msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, selfID, since)
 			messages = append(messages, msgs...)
 		}
-	} else if err != nil {
-		fmt.Printf("Lark: Chat.List error: %v\n", err)
 	}
 
-	// 2. Fetch P2P Chats via Contact List
-	userReq := larkcontact.NewListUserReqBuilder().DepartmentId("0").Build()
-	userResp, err := l.client.Contact.V3.User.List(ctx, userReq, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
-	if err == nil && userResp.Success() && userResp.Data != nil && userResp.Data.Items != nil {
-		fmt.Printf("Lark: Found %d users in contacts\n", len(userResp.Data.Items))
-		for _, user := range userResp.Data.Items {
-			if user.OpenId == nil || *user.OpenId == "" { continue }
-			if user.Name != nil {
-				fmt.Printf("Lark: Resolving P2P chat for contact: %s (%s)\n", *user.Name, *user.OpenId)
+	// 2. Fetch P2P via Contacts
+	contactData, err := l.rawRequest(ctx, "GET", "contact/v3/users", nil, url.Values{"department_id": {"0"}})
+	if err == nil {
+		var c struct { 
+			Items []struct { 
+				OpenId string `json:"open_id"` 
+				Name string `json:"name"` 
+			} `json:"items"` 
+		}
+		json.Unmarshal(contactData, &c)
+		for _, user := range c.Items {
+			if user.OpenId == "" || user.OpenId == selfID { continue }
+			
+			p2pBody := map[string]interface{}{
+				"user_id_list": []string{user.OpenId},
 			}
-			
-			// Get or Create P2P Chat ID
-			p2pReq := larkim.NewCreateChatReqBuilder().
-				UserIdType("open_id").
-				Body(larkim.NewCreateChatReqBodyBuilder().
-					UserIdList([]string{*user.OpenId}).
-					Build()).
-				Build()
-			
-			p2pResp, err := l.client.Im.V1.Chat.Create(ctx, p2pReq, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
-			if err == nil && p2pResp.Success() && p2pResp.Data != nil && p2pResp.Data.ChatId != nil {
-				userName := "Private"
-				if user.Name != nil { userName = *user.Name }
-				fmt.Printf("Lark: Fetching from P2P chat with %s (ID: %s)\n", userName, *p2pResp.Data.ChatId)
-				msgs := l.fetchFromChat(ctx, *p2pResp.Data.ChatId, userName, true, selfID, since)
-				messages = append(messages, msgs...)
-			} else if err != nil {
-				fmt.Printf("Lark: CreateChat error for %s: %v\n", *user.OpenId, err)
+			p2pData, err := l.rawRequest(ctx, "POST", "im/v1/chats", p2pBody, url.Values{"user_id_type": {"open_id"}})
+			if err == nil {
+				var p struct { ChatId string `json:"chat_id"` }
+				json.Unmarshal(p2pData, &p)
+				if p.ChatId != "" {
+					msgs := l.fetchFromChat(ctx, p.ChatId, user.Name, true, selfID, since)
+					messages = append(messages, msgs...)
+				}
 			}
 		}
-	} else if err != nil {
-		fmt.Printf("Lark: User.List error: %v\n", err)
 	}
 
-	// Resolve Sender Names
+	// Resolve Names
 	senderIDs := make(map[string]bool)
 	for _, m := range messages { senderIDs[m.Sender] = true }
 	if len(senderIDs) > 0 {
 		var ids []string
 		for id := range senderIDs { ids = append(ids, id) }
-		nameMap := l.resolveNames(ctx, ids)
-		for i := range messages {
-			if name, ok := nameMap[messages[i].Sender]; ok {
-				messages[i].Sender = name
+		
+		nameReqBody := map[string]interface{}{ "user_ids": ids }
+		nameData, err := l.rawRequest(ctx, "POST", "contact/v3/users/batch_get", nameReqBody, url.Values{"user_id_type": {"open_id"}})
+		if err == nil {
+			var n struct { 
+				Items []struct { 
+					OpenId string `json:"open_id"` 
+					Name string `json:"name"` 
+				} `json:"items"` 
+			}
+			json.Unmarshal(nameData, &n)
+			nameMap := make(map[string]string)
+			for _, user := range n.Items { nameMap[user.OpenId] = user.Name }
+			for i := range messages {
+				if name, ok := nameMap[messages[i].Sender]; ok {
+					messages[i].Sender = name
+				}
 			}
 		}
 	}
@@ -210,50 +256,46 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 }
 
 func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, selfID string, since time.Time) []types.Message {
-	var results []types.Message
-	startTime := strconv.FormatInt(since.UnixMilli()+1, 10)
-	fmt.Printf("Lark: Fetching messages for chat %s (ID: %s) since %s\n", chatName, chatID, since.Format(time.RFC3339))
+	query := url.Values{
+		"container_id_type": {"chat"},
+		"container_id":      {chatID},
+		"start_time":        {strconv.FormatInt(since.UnixMilli()+1, 10)},
+	}
 	
-	msgReq := larkim.NewListMessageReqBuilder().
-		ContainerIdType("chat").
-		ContainerId(chatID).
-		StartTime(startTime).
-		Build()
-
-	msgResp, err := l.client.Im.V1.Message.List(ctx, msgReq, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
+	msgData, err := l.rawRequest(ctx, "GET", "im/v1/messages", nil, query)
 	if err != nil {
-		fmt.Printf("Lark: Message.List error for %s: %v\n", chatID, err)
-		return nil
-	}
-	if !msgResp.Success() {
-		fmt.Printf("Lark: Message.List failed for %s: %d %s\n", chatID, msgResp.Code, msgResp.Msg)
 		return nil
 	}
 
-	if msgResp.Data != nil && msgResp.Data.Items != nil && len(msgResp.Data.Items) > 0 {
-		fmt.Printf("Lark: Found %d raw messages in chat %s\n", len(msgResp.Data.Items), chatName)
+	var m struct {
+		Items []struct {
+			MessageId  string `json:"message_id"`
+			MsgType    string `json:"msg_type"`
+			CreateTime string `json:"create_time"`
+			Sender     struct { Id string `json:"id"` } `json:"sender"`
+			Body       struct { Content string `json:"content"` } `json:"body"`
+		} `json:"items"`
 	}
+	json.Unmarshal(msgData, &m)
 
-	for _, msg := range msgResp.Data.Items {
-		if msg.Sender == nil || msg.Sender.Id == nil || *msg.Sender.Id == selfID { continue }
-		if msg.Body == nil || msg.Body.Content == nil { continue }
-
+	var results []types.Message
+	for _, msg := range m.Items {
+		if msg.Sender.Id == selfID { continue }
+		
 		var contentObj struct { Text string `json:"text"` }
-		json.Unmarshal([]byte(*msg.Body.Content), &contentObj)
+		json.Unmarshal([]byte(msg.Body.Content), &contentObj)
 		content := contentObj.Text
 		
-		if msg.MsgType != nil && *msg.MsgType != "text" {
-			mediaPlaceholder := fmt.Sprintf("[%s]", *msg.MsgType)
-			if content == "" { content = mediaPlaceholder } else { content = mediaPlaceholder + " " + content }
+		if msg.MsgType != "text" {
+			placeholder := fmt.Sprintf("[%s]", msg.MsgType)
+			if content == "" { content = placeholder } else { content = placeholder + " " + content }
 		}
 
-		if msg.CreateTime == nil || msg.MessageId == nil { continue }
-		ts, _ := strconv.ParseInt(*msg.CreateTime, 10, 64)
-		
+		ts, _ := strconv.ParseInt(msg.CreateTime, 10, 64)
 		results = append(results, types.Message{
-			ID:        *msg.MessageId,
+			ID:        msg.MessageId,
 			Source:    "lark",
-			Sender:    *msg.Sender.Id,
+			Sender:    msg.Sender.Id,
 			Content:   content,
 			Timestamp: time.UnixMilli(ts),
 			IsPrivate: isPrivate,
@@ -261,22 +303,4 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 		})
 	}
 	return results
-}
-
-func (l *LarkAdapter) resolveNames(ctx context.Context, ids []string) map[string]string {
-	nameMap := make(map[string]string)
-	userReq := larkcontact.NewBatchUserReqBuilder().
-		UserIds(ids).
-		UserIdType("open_id").
-		Build()
-	
-	userResp, err := l.client.Contact.V3.User.Batch(ctx, userReq, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
-	if err == nil && userResp.Success() && userResp.Data != nil && userResp.Data.Items != nil {
-		for _, user := range userResp.Data.Items {
-			if user.OpenId != nil && user.Name != nil {
-				nameMap[*user.OpenId] = *user.Name
-			}
-		}
-	}
-	return nameMap
 }
