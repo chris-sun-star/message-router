@@ -25,12 +25,13 @@ type LarkTokenData struct {
 type LarkAdapter struct {
 	appID          string
 	appSecret      string
+	baseURL        string
 	client         *lark.Client
 	tokenData      LarkTokenData
 	tokenUpdated   func(newTokenJSON string)
 }
 
-func NewLarkAdapter(appID, appSecret, tokenJSON string, onTokenUpdate func(string)) *LarkAdapter {
+func NewLarkAdapter(appID, appSecret, baseURL, tokenJSON string, onTokenUpdate func(string)) *LarkAdapter {
 	var data LarkTokenData
 	// Try to parse as JSON, fallback to raw string for backward compatibility
 	if err := json.Unmarshal([]byte(tokenJSON), &data); err != nil {
@@ -43,7 +44,8 @@ func NewLarkAdapter(appID, appSecret, tokenJSON string, onTokenUpdate func(strin
 	return &LarkAdapter{
 		appID:        appID,
 		appSecret:    appSecret,
-		client:       lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl("https://open.larksuite.com")),
+		baseURL:      baseURL,
+		client:       lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl(baseURL)),
 		tokenData:    data,
 		tokenUpdated: onTokenUpdate,
 	}
@@ -58,7 +60,8 @@ func (l *LarkAdapter) refreshToken(ctx context.Context) error {
 		return fmt.Errorf("no refresh token available")
 	}
 
-	url := "https://open.larksuite.com/open-apis/authen/v1/refresh_access_token"
+	// Use correct endpoint based on domain
+	url := fmt.Sprintf("%s/open-apis/authen/v1/refresh_access_token", l.baseURL)
 	
 	// We need app_access_token to refresh user_access_token
 	appTokenResp, err := l.client.GetAppAccessTokenBySelfBuiltApp(ctx, &larkcore.SelfBuiltAppAccessTokenReq{
@@ -128,10 +131,9 @@ func (l *LarkAdapter) refreshToken(ctx context.Context) error {
 
 func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]types.Message, error) {
 	// Check if token needs refresh (with 10 min buffer)
-	if time.Now().Add(10 * time.Minute).After(l.tokenData.ExpiresAt) {
+	if l.tokenData.RefreshToken != "" && time.Now().Add(10 * time.Minute).After(l.tokenData.ExpiresAt) {
 		if err := l.refreshToken(ctx); err != nil {
 			fmt.Printf("Warning: failed to refresh Lark token: %v\n", err)
-			// Continue anyway, maybe the token is still valid for a bit
 		}
 	}
 
@@ -165,7 +167,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		msgReq := larkim.NewListMessageReqBuilder().
 			ContainerIdType("chat").
 			ContainerId(*item.ChatId).
-			StartTime(strconv.FormatInt(since.UnixMilli()+1, 10)).
+			StartTime(strconv.FormatInt(since.UnixMilli()+1, 10)). // +1 to avoid fetching the last message again
 			Build()
 
 		msgResp, err := l.client.Im.V1.Message.List(ctx, msgReq, larkcore.WithUserAccessToken(l.tokenData.AccessToken))

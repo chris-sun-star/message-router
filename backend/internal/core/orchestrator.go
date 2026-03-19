@@ -135,6 +135,13 @@ func (o *Orchestrator) claimSubscription(subID uint) bool {
 	return result.RowsAffected > 0
 }
 
+func (o *Orchestrator) getLarkBaseURL() string {
+	if config.AppConfig.Channels.Lark.Domain == "feishu" {
+		return "https://open.feishu.cn"
+	}
+	return "https://open.larksuite.com"
+}
+
 func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subscription) {
 	// Create a sub-context with timeout for this specific sync task
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -176,7 +183,8 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 		source = adapters.NewTelegramAdapter(tData.APIID, tData.APIHash, tData.Session)
 	case models.SourceLark:
 		larkCfg := config.AppConfig.Channels.Lark
-		source = adapters.NewLarkAdapter(larkCfg.AppID, larkCfg.AppSecret, srcToken, func(newTokenJSON string) {
+		baseURL := o.getLarkBaseURL()
+		source = adapters.NewLarkAdapter(larkCfg.AppID, larkCfg.AppSecret, baseURL, srcToken, func(newTokenJSON string) {
 			// Re-encrypt and update database
 			encrypted, err := utils.Encrypt(newTokenJSON, encryptionKey)
 			if err == nil {

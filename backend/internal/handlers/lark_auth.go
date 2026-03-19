@@ -19,6 +19,13 @@ type LarkAuthURLResponse struct {
 	URL string `json:"url"`
 }
 
+func getLarkBaseURL() string {
+	if config.AppConfig.Channels.Lark.Domain == "feishu" {
+		return "https://open.feishu.cn"
+	}
+	return "https://open.larksuite.com"
+}
+
 func GetLarkAuthURL(c *gin.Context) {
 	appID := config.AppConfig.Channels.Lark.AppID
 	if appID == "" || appID == "your_lark_app_id" {
@@ -31,8 +38,9 @@ func GetLarkAuthURL(c *gin.Context) {
 		redirectURI = "http://localhost:5173/channels"
 	}
 
-	authURL := fmt.Sprintf("https://open.larksuite.com/open-apis/authen/v1/index?app_id=%s&redirect_uri=%s&state=lark-auth", 
-		appID, url.QueryEscape(redirectURI))
+	baseURL := getLarkBaseURL()
+	authURL := fmt.Sprintf("%s/open-apis/authen/v1/index?app_id=%s&redirect_uri=%s&state=lark-auth", 
+		baseURL, appID, url.QueryEscape(redirectURI))
 
 	c.JSON(http.StatusOK, LarkAuthURLResponse{URL: authURL})
 }
@@ -76,7 +84,8 @@ func HandleLarkCallback(c *gin.Context) {
 		return
 	}
 
-	tokenURL := "https://open.larksuite.com/open-apis/authen/v1/access_token"
+	baseURL := getLarkBaseURL()
+	tokenURL := fmt.Sprintf("%s/open-apis/authen/v1/access_token", baseURL)
 	postBody, _ := json.Marshal(map[string]string{
 		"grant_type": "authorization_code",
 		"code":       req.Code,
@@ -144,7 +153,8 @@ func HandleLarkCallback(c *gin.Context) {
 }
 
 func getLarkAppAccessToken(appID, appSecret string) (string, error) {
-	url := "https://open.larksuite.com/open-apis/auth/v3/app_access_token/internal"
+	baseURL := getLarkBaseURL()
+	url := fmt.Sprintf("%s/open-apis/auth/v3/app_access_token/internal", baseURL)
 	payload := map[string]string{
 		"app_id":     appID,
 		"app_secret": appSecret,

@@ -33,6 +33,7 @@ type Config struct {
 		Lark struct {
 			AppID     string `yaml:"app_id"`
 			AppSecret string `yaml:"app_secret"`
+			Domain    string `yaml:"domain"`
 		} `yaml:"lark"`
 	} `yaml:"channels"`
 
