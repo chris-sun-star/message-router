@@ -39,8 +39,10 @@ func GetLarkAuthURL(c *gin.Context) {
 	}
 
 	baseURL := getLarkBaseURL()
-	authURL := fmt.Sprintf("%s/open-apis/authen/v1/index?app_id=%s&redirect_uri=%s&state=lark-auth", 
-		baseURL, appID, url.QueryEscape(redirectURI))
+	// Explicitly request required scopes
+	scopes := "im:message:readonly im:chat:readonly im:chat contact:contact:readonly contact:user.base:readonly contact:user.id:readonly"
+	authURL := fmt.Sprintf("%s/open-apis/authen/v1/index?app_id=%s&redirect_uri=%s&state=lark-auth&scope=%s", 
+		baseURL, appID, url.QueryEscape(redirectURI), url.QueryEscape(scopes))
 
 	c.JSON(http.StatusOK, LarkAuthURLResponse{URL: authURL})
 }
