@@ -176,7 +176,14 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 		source = adapters.NewTelegramAdapter(tData.APIID, tData.APIHash, tData.Session)
 	case models.SourceLark:
 		larkCfg := config.AppConfig.Channels.Lark
-		source = adapters.NewLarkAdapter(larkCfg.AppID, larkCfg.AppSecret, srcToken)
+		source = adapters.NewLarkAdapter(larkCfg.AppID, larkCfg.AppSecret, srcToken, func(newTokenJSON string) {
+			// Re-encrypt and update database
+			encrypted, err := utils.Encrypt(newTokenJSON, encryptionKey)
+			if err == nil {
+				db.DB.Model(&models.Credential{}).Where("id = ?", srcCred.ID).Update("encrypted_data", encrypted)
+				log.Printf("Successfully refreshed and updated Lark token for cred %d", srcCred.ID)
+			}
+		})
 	default:
 		log.Printf("Unknown source type %s", srcCred.SourceType)
 		return

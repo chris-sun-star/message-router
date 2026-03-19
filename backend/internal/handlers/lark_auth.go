@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/admin/message-router/internal/config"
 	"github.com/admin/message-router/internal/db"
@@ -45,14 +46,16 @@ type LarkTokenResponse struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 	Data struct {
-		AccessToken string `json:"access_token"`
-		TokenType   string `json:"token_type"`
-		ExpiresIn   int    `json:"expires_in"`
-		Name        string `json:"name"`
-		EnName      string `json:"en_name"`
-		AvatarUrl   string `json:"avatar_url"`
-		OpenId      string `json:"open_id"`
-		UnionId     string `json:"union_id"`
+		AccessToken      string `json:"access_token"`
+		TokenType        string `json:"token_type"`
+		ExpiresIn        int    `json:"expires_in"`
+		RefreshToken     string `json:"refresh_token"`
+		RefreshExpiresIn int    `json:"refresh_expires_in"`
+		Name             string `json:"name"`
+		EnName           string `json:"en_name"`
+		AvatarUrl        string `json:"avatar_url"`
+		OpenId           string `json:"open_id"`
+		UnionId          string `json:"union_id"`
 	} `json:"data"`
 }
 
@@ -106,8 +109,20 @@ func HandleLarkCallback(c *gin.Context) {
 		return
 	}
 
+	// Prepare token data JSON
+	tokenData := struct {
+		AccessToken  string    `json:"access_token"`
+		RefreshToken string    `json:"refresh_token"`
+		ExpiresAt    time.Time `json:"expires_at"`
+	}{
+		AccessToken:  larkResp.Data.AccessToken,
+		RefreshToken: larkResp.Data.RefreshToken,
+		ExpiresAt:    time.Now().Add(time.Duration(larkResp.Data.ExpiresIn) * time.Second),
+	}
+
+	tokenDataJSON, _ := json.Marshal(tokenData)
 	encryptionKey := config.AppConfig.Encryption.Key
-	encryptedData, err := utils.Encrypt(larkResp.Data.AccessToken, encryptionKey)
+	encryptedData, err := utils.Encrypt(string(tokenDataJSON), encryptionKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt token"})
 		return
