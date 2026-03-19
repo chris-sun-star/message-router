@@ -163,6 +163,13 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		if item.ChatId == nil {
 			continue
 		}
+
+		chatName := "Private Chat"
+		if item.Name != nil && *item.Name != "" {
+			chatName = *item.Name
+		}
+		isPrivate := (item.Name == nil || *item.Name == "")
+
 		// 2. Fetch messages for each chat
 		msgReq := larkim.NewListMessageReqBuilder().
 			ContainerIdType("chat").
@@ -173,6 +180,10 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		msgResp, err := l.client.Im.V1.Message.List(ctx, msgReq, larkcore.WithUserAccessToken(l.tokenData.AccessToken))
 		if err != nil || !msgResp.Success() || msgResp.Data == nil || msgResp.Data.Items == nil {
 			continue
+		}
+
+		if len(msgResp.Data.Items) > 0 {
+			fmt.Printf("Lark: found %d messages in chat %s (isPrivate: %v)\n", len(msgResp.Data.Items), chatName, isPrivate)
 		}
 
 		for _, msg := range msgResp.Data.Items {
@@ -206,18 +217,13 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			}
 			ts, _ := strconv.ParseInt(*msg.CreateTime, 10, 64)
 			
-			chatName := ""
-			if item.Name != nil {
-				chatName = *item.Name
-			}
-
 			messages = append(messages, types.Message{
 				ID:        *msg.MessageId,
 				Source:    "lark",
 				Sender:    *msg.Sender.Id,
 				Content:   content,
 				Timestamp: time.UnixMilli(ts),
-				IsPrivate: false, 
+				IsPrivate: isPrivate, 
 				ChatName:  chatName,
 			})
 		}
