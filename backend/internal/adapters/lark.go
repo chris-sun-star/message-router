@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/admin/message-router/internal/types"
@@ -189,6 +190,22 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 
 	var messages []types.Message
 
+	// 0. Get Bot Info
+	botData, err := l.rawRequest(ctx, "GET", "bot/v3/info", nil, nil, true)
+	var botID, botName string
+	if err == nil {
+		var b struct { 
+			Bot struct { 
+				OpenId string `json:"open_id"` 
+				Name   string `json:"name"` 
+			} `json:"bot"` 
+		}
+		json.Unmarshal(botData, &b)
+		botID = b.Bot.OpenId
+		botName = b.Bot.Name
+		fmt.Printf("Lark: Bot Info: %s (%s)\n", botName, botID)
+	}
+
 	fmt.Printf("Lark: Fetching chats for bot (since %s)\n", since.Format(time.RFC3339))
 
 	// 1. Fetch ALL Chats the BOT is in
@@ -201,6 +218,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		Items []struct { 
 			ChatId string `json:"chat_id"` 
 			Name string `json:"name"` 
+			ChatMode string `json:"chat_mode"`
 		} `json:"items"` 
 	}
 	if err := json.Unmarshal(chatData, &g); err != nil {
@@ -210,13 +228,12 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 	fmt.Printf("Lark: Found %d chats for bot\n", len(g.Items))
 
 	for _, item := range g.Items {
-		// Skip "no title" chats to avoid spamming API and focus on real groups
-		if item.Name == "" {
+		if item.Name == "" && item.ChatMode != "p2p" {
 			continue
 		}
 		
-		fmt.Printf("Lark: Processing chat %s (ID: %s)\n", item.Name, item.ChatId)
-		msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, since)
+		isP2P := item.ChatMode == "p2p"
+		msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, isP2P, botID, botName, since)
 		if len(msgs) > 0 {
 			fmt.Printf("Lark: Found %d new messages in chat %s\n", len(msgs), item.Name)
 		}
@@ -253,7 +270,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 	return messages, nil
 }
 
-func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, since time.Time) []types.Message {
+func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, botID string, botName string, since time.Time) []types.Message {
 	nowSec := time.Now().Unix()
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Unix()
 	startSec := since.Unix()
@@ -291,6 +308,11 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 				IdType string `json:"id_type"`
 			} `json:"sender"`
 			Body       struct { Content string `json:"content"` } `json:"body"`
+			Mentions []struct {
+				Key string `json:"key"`
+				Id struct { OpenId string `json:"open_id"` } `json:"id"`
+				Name string `json:"name"`
+			} `json:"mentions"`
 		} `json:"items"`
 	}
 	json.Unmarshal(msgData, &m)
@@ -301,7 +323,6 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 
 	var results []types.Message
 	for _, msg := range m.Items {
-		// Only process messages from users, skip bot messages
 		if msg.Sender.IdType != "user" {
 			continue
 		}
@@ -310,7 +331,28 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 		json.Unmarshal([]byte(msg.Body.Content), &contentObj)
 		content := contentObj.Text
 		
-		fmt.Printf("Lark DEBUG: Message from %s in %s: %s (Type: %s)\n", msg.Sender.Id, chatName, content, msg.MsgType)
+		// Mentions check for group chats
+		isMentioned := false
+		if isPrivate {
+			isMentioned = true
+		} else {
+			for _, mention := range msg.Mentions {
+				if mention.Id.OpenId == botID {
+					isMentioned = true
+					break
+				}
+			}
+			// Fallback text check
+			if !isMentioned && botName != "" && strings.Contains(content, "@"+botName) {
+				isMentioned = true
+			}
+		}
+
+		if !isMentioned {
+			continue
+		}
+
+		fmt.Printf("Lark DEBUG: Forwarding message from %s in %s: %s\n", msg.Sender.Id, chatName, content)
 
 		if msg.MsgType != "text" {
 			placeholder := fmt.Sprintf("[%s]", msg.MsgType)
