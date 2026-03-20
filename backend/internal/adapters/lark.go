@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"strconv"
 	"time"
 
@@ -104,14 +103,12 @@ func (l *LarkAdapter) rawRequest(ctx context.Context, method, path string, body 
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		fmt.Printf("Lark DEBUG: Failed to decode response: %s\n", string(respBody))
 		return nil, err
 	}
 
 	if result.Code != 0 {
-		// Only fallback to Tenant Token for non-P2P paths or if specifically requested
-		// We avoid automatic fallback here to prevent "Bot not in chat" noise if we know it's a user-only chat
-		fmt.Printf("Lark DEBUG ERROR: Path: %s, Response: %s\n", path, string(respBody))
+		// Log error but return it to caller
+		fmt.Printf("Lark API Error: Path=%s Code=%d Msg=%s\n", path, result.Code, result.Msg)
 		return nil, fmt.Errorf("lark error: %d %s", result.Code, result.Msg)
 	}
 
@@ -185,25 +182,21 @@ func (l *LarkAdapter) refreshToken(ctx context.Context) error {
 }
 
 func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]types.Message, error) {
+	// Refresh user token if needed (though we'll use tenant token for most things)
 	if l.tokenData.RefreshToken != "" && time.Now().Add(10 * time.Minute).After(l.tokenData.ExpiresAt) {
 		l.refreshToken(ctx)
 	}
 
 	var messages []types.Message
 
-	// 0. Get self ID
-	selfData, err := l.rawRequest(ctx, "GET", "authen/v1/user_info", nil, nil, false)
-	var selfID string
-	if err == nil {
-		var s struct { UserId string `json:"user_id"` }
-		json.Unmarshal(selfData, &s)
-		selfID = s.UserId
-		fmt.Printf("Lark: Authenticated as user ID %s\n", selfID)
-	}
+	// Use Tenant Token to get the App's own ID (Bot ID)
+	// For custom apps, the bot's ID is often its AppID but let's be sure.
+	// Actually, we can just skip self messages by checking sender.id_type != "user"
+	// or resolving the bot's user_id.
 
-	// 1. Fetch ALL Chats the user is in (Groups)
-	// Note: im/v1/chats with User Token returns groups the user is in.
-	groupData, err := l.rawRequest(ctx, "GET", "im/v1/chats", nil, url.Values{"page_size": {"100"}}, false)
+	// 1. Fetch ALL Chats the BOT is in (using Tenant Token)
+	// This ensures we only try to fetch messages from chats we have access to.
+	chatData, err := l.rawRequest(ctx, "GET", "im/v1/chats", nil, url.Values{"page_size": {"100"}}, true)
 	if err == nil {
 		var g struct { 
 			Items []struct { 
@@ -211,18 +204,14 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 				Name string `json:"name"` 
 			} `json:"items"` 
 		}
-		json.Unmarshal(groupData, &g)
-		fmt.Printf("Lark: Found %d chats in list\n", len(g.Items))
+		json.Unmarshal(chatData, &g)
 		for _, item := range g.Items {
-			msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, selfID, since)
+			msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, since)
 			messages = append(messages, msgs...)
 		}
 	}
 
-	// 2. We removed the contact-to-P2P creation to stop the "no title" chat spam.
-	// For now, we will rely on groups. If P2P is needed, we need a better way to discover existing P2P chat IDs.
-
-	// Resolve Names
+	// 2. Resolve Names (using Tenant Token)
 	senderIDs := make(map[string]bool)
 	for _, m := range messages { senderIDs[m.Sender] = true }
 	if len(senderIDs) > 0 {
@@ -230,7 +219,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		for id := range senderIDs { ids = append(ids, id) }
 		
 		nameReqBody := map[string]interface{}{ "user_ids": ids }
-		nameData, err := l.rawRequest(ctx, "POST", "contact/v3/users/batch_get", nameReqBody, url.Values{"user_id_type": {"open_id"}}, false)
+		nameData, err := l.rawRequest(ctx, "POST", "contact/v3/users/batch_get", nameReqBody, url.Values{"user_id_type": {"open_id"}}, true)
 		if err == nil {
 			var n struct { 
 				Items []struct { 
@@ -252,9 +241,16 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 	return messages, nil
 }
 
-func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, selfID string, since time.Time) []types.Message {
+func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, since time.Time) []types.Message {
 	nowMilli := time.Now().UnixMilli()
+	
+	// Lark requirement: range cannot exceed 7 days
+	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).UnixMilli()
 	startMilli := since.UnixMilli() + 1
+	if startMilli < sevenDaysAgo {
+		startMilli = sevenDaysAgo
+	}
+	
 	if startMilli >= nowMilli {
 		return nil
 	}
@@ -264,21 +260,13 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 		"container_id":      {chatID},
 		"start_time":        {strconv.FormatInt(startMilli, 10)},
 		"end_time":          {strconv.FormatInt(nowMilli, 10)},
+		"page_size":         {"50"},
 	}
 	
-	// We try with User Token first.
-	msgData, err := l.rawRequest(ctx, "GET", "im/v1/messages", nil, query, false)
+	// Use Tenant Token as recommended by the documentation for server-side sync
+	msgData, err := l.rawRequest(ctx, "GET", "im/v1/messages", nil, query, true)
 	if err != nil {
-		// If it's a group chat (IDs starting with oc_), try with Tenant Token (Bot identity)
-		if strings.HasPrefix(chatID, "oc_") {
-			msgData, err = l.rawRequest(ctx, "GET", "im/v1/messages", nil, query, true)
-		}
-		
-		if err != nil {
-			// If both failed, just return nil to skip this chat silently
-			// This happens when the bot isn't in the group or user msg ability is restricted
-			return nil
-		}
+		return nil
 	}
 
 	var m struct {
@@ -286,7 +274,10 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 			MessageId  string `json:"message_id"`
 			MsgType    string `json:"msg_type"`
 			CreateTime string `json:"create_time"`
-			Sender     struct { Id string `json:"id"` } `json:"sender"`
+			Sender     struct { 
+				Id string `json:"id"` 
+				IdType string `json:"id_type"`
+			} `json:"sender"`
 			Body       struct { Content string `json:"content"` } `json:"body"`
 		} `json:"items"`
 	}
@@ -294,7 +285,10 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 
 	var results []types.Message
 	for _, msg := range m.Items {
-		if msg.Sender.Id == selfID { continue }
+		// Only process messages from users, skip bot messages
+		if msg.Sender.IdType != "user" {
+			continue
+		}
 		
 		var contentObj struct { Text string `json:"text"` }
 		json.Unmarshal([]byte(msg.Body.Content), &contentObj)
