@@ -108,11 +108,8 @@ func (l *LarkAdapter) rawRequest(ctx context.Context, method, path string, body 
 	}
 
 	if result.Code != 0 {
-		// Fallback to Tenant Token if User Token fails with permission error
-		if !useTenantToken && (result.Code == 9499 || result.Code == 40001 || result.Code == 12070 || result.Code == 99991672) {
-			fmt.Printf("Lark: User token failed (%d), retrying with Tenant token for %s\n", result.Code, path)
-			return l.rawRequest(ctx, method, path, body, query, true)
-		}
+		// Only fallback to Tenant Token for non-P2P paths or if specifically requested
+		// We avoid automatic fallback here to prevent "Bot not in chat" noise if we know it's a user-only chat
 		fmt.Printf("Lark DEBUG ERROR: Path: %s, Response: %s\n", path, string(respBody))
 		return nil, fmt.Errorf("lark error: %d %s", result.Code, result.Msg)
 	}
@@ -203,8 +200,9 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		fmt.Printf("Lark: Authenticated as user ID %s\n", selfID)
 	}
 
-	// 1. Fetch Groups
-	groupData, err := l.rawRequest(ctx, "GET", "im/v1/chats", nil, nil, false)
+	// 1. Fetch ALL Chats the user is in (Groups)
+	// Note: im/v1/chats with User Token returns groups the user is in.
+	groupData, err := l.rawRequest(ctx, "GET", "im/v1/chats", nil, url.Values{"page_size": {"100"}}, false)
 	if err == nil {
 		var g struct { 
 			Items []struct { 
@@ -213,39 +211,15 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			} `json:"items"` 
 		}
 		json.Unmarshal(groupData, &g)
+		fmt.Printf("Lark: Found %d chats in list\n", len(g.Items))
 		for _, item := range g.Items {
 			msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, selfID, since)
 			messages = append(messages, msgs...)
 		}
 	}
 
-	// 2. Fetch P2P via Contacts
-	contactData, err := l.rawRequest(ctx, "GET", "contact/v3/users", nil, url.Values{"department_id": {"0"}}, false)
-	if err == nil {
-		var c struct { 
-			Items []struct { 
-				OpenId string `json:"open_id"` 
-				Name string `json:"name"` 
-			} `json:"items"` 
-		}
-		json.Unmarshal(contactData, &c)
-		for _, user := range c.Items {
-			if user.OpenId == "" || user.OpenId == selfID { continue }
-			
-			p2pBody := map[string]interface{}{
-				"user_id_list": []string{user.OpenId},
-			}
-			p2pData, err := l.rawRequest(ctx, "POST", "im/v1/chats", p2pBody, url.Values{"user_id_type": {"open_id"}}, false)
-			if err == nil {
-				var p struct { ChatId string `json:"chat_id"` }
-				json.Unmarshal(p2pData, &p)
-				if p.ChatId != "" {
-					msgs := l.fetchFromChat(ctx, p.ChatId, user.Name, true, selfID, since)
-					messages = append(messages, msgs...)
-				}
-			}
-		}
-	}
+	// 2. We removed the contact-to-P2P creation to stop the "no title" chat spam.
+	// For now, we will rely on groups. If P2P is needed, we need a better way to discover existing P2P chat IDs.
 
 	// Resolve Names
 	senderIDs := make(map[string]bool)
@@ -280,8 +254,6 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, selfID string, since time.Time) []types.Message {
 	nowMilli := time.Now().UnixMilli()
 	startMilli := since.UnixMilli() + 1
-	
-	// Safety check: start_time cannot be later than end_time
 	if startMilli >= nowMilli {
 		return nil
 	}
@@ -293,9 +265,18 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 		"end_time":          {strconv.FormatInt(nowMilli, 10)},
 	}
 	
+	// We try with User Token first. If it fails with 40001 (unauthorized msg ability), 
+	// it means the Bot must be in the group to read messages even if we use User Token.
 	msgData, err := l.rawRequest(ctx, "GET", "im/v1/messages", nil, query, false)
 	if err != nil {
-		return nil
+		// Retry with Tenant Token (Bot identity) ONLY if it's a group chat
+		// because the bot cannot be in a private P2P chat between two other people.
+		if !isPrivate {
+			msgData, err = l.rawRequest(ctx, "GET", "im/v1/messages", nil, query, true)
+		}
+		if err != nil {
+			return nil
+		}
 	}
 
 	var m struct {
