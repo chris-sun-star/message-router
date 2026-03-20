@@ -210,6 +210,11 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 	fmt.Printf("Lark: Found %d chats for bot\n", len(g.Items))
 
 	for _, item := range g.Items {
+		// Skip "no title" chats to avoid spamming API and focus on real groups
+		if item.Name == "" {
+			continue
+		}
+		
 		msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, since)
 		if len(msgs) > 0 {
 			fmt.Printf("Lark: Found %d new messages in chat %s\n", len(msgs), item.Name)
@@ -254,7 +259,7 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 	if startSec < sevenDaysAgo {
 		startSec = sevenDaysAgo
 	}
-
+	
 	if startSec >= nowSec {
 		return nil
 	}
@@ -262,7 +267,6 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 	fmt.Printf("Lark: Fetching messages for chat %s (since %d, end %d)\n", chatName, startSec, nowSec)
 
 	query := url.Values{
-
 		"container_id_type": {"chat"},
 		"container_id":      {chatID},
 		"start_time":        {strconv.FormatInt(startSec, 10)},
@@ -290,8 +294,13 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 	}
 	json.Unmarshal(msgData, &m)
 
+	if len(m.Items) > 0 {
+		fmt.Printf("Lark: API returned %d raw messages in chat %s\n", len(m.Items), chatName)
+	}
+
 	var results []types.Message
 	for _, msg := range m.Items {
+		// Only process messages from users, skip bot messages
 		if msg.Sender.IdType != "user" {
 			continue
 		}
@@ -300,6 +309,8 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 		json.Unmarshal([]byte(msg.Body.Content), &contentObj)
 		content := contentObj.Text
 		
+		fmt.Printf("Lark DEBUG: Message from %s in %s: %s (Type: %s)\n", msg.Sender.Id, chatName, content, msg.MsgType)
+
 		if msg.MsgType != "text" {
 			placeholder := fmt.Sprintf("[%s]", msg.MsgType)
 			if content == "" { content = placeholder } else { content = placeholder + " " + content }
