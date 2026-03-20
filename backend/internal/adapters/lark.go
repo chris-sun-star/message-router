@@ -41,11 +41,12 @@ func NewLarkAdapter(appID, appSecret, baseURL, tokenJSON string, onTokenUpdate f
 		}
 	}
 
+	httpClient := utils.GetHTTPClient()
 	return &LarkAdapter{
 		appID:        appID,
 		appSecret:    appSecret,
 		baseURL:      baseURL,
-		client:       lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl(baseURL)),
+		client:       lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl(baseURL), lark.WithHttpClient(httpClient)),
 		tokenData:    data,
 		tokenUpdated: onTokenUpdate,
 	}
@@ -188,6 +189,8 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 
 	var messages []types.Message
 
+	fmt.Printf("Lark: Fetching chats for bot (since %s)\n", since.Format(time.RFC3339))
+
 	// 1. Fetch ALL Chats the BOT is in
 	chatData, err := l.rawRequest(ctx, "GET", "im/v1/chats", nil, url.Values{"page_size": {"100"}}, true)
 	if err != nil {
@@ -204,8 +207,13 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		return nil, fmt.Errorf("failed to unmarshal chats: %w", err)
 	}
 
+	fmt.Printf("Lark: Found %d chats for bot\n", len(g.Items))
+
 	for _, item := range g.Items {
 		msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, since)
+		if len(msgs) > 0 {
+			fmt.Printf("Lark: Found %d new messages in chat %s\n", len(msgs), item.Name)
+		}
 		messages = append(messages, msgs...)
 	}
 
@@ -246,12 +254,15 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 	if startSec < sevenDaysAgo {
 		startSec = sevenDaysAgo
 	}
-	
+
 	if startSec >= nowSec {
 		return nil
 	}
 
+	fmt.Printf("Lark: Fetching messages for chat %s (since %d, end %d)\n", chatName, startSec, nowSec)
+
 	query := url.Values{
+
 		"container_id_type": {"chat"},
 		"container_id":      {chatID},
 		"start_time":        {strconv.FormatInt(startSec, 10)},
