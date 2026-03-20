@@ -215,6 +215,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			continue
 		}
 		
+		fmt.Printf("Lark: Processing chat %s (ID: %s)\n", item.Name, item.ChatId)
 		msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, since)
 		if len(msgs) > 0 {
 			fmt.Printf("Lark: Found %d new messages in chat %s\n", len(msgs), item.Name)
