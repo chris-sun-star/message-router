@@ -242,25 +242,26 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 }
 
 func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, since time.Time) []types.Message {
-	nowMilli := time.Now().UnixMilli()
+	nowSec := time.Now().Unix()
 	
 	// Lark requirement: range cannot exceed 7 days
-	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).UnixMilli()
-	startMilli := since.UnixMilli() + 1
-	if startMilli < sevenDaysAgo {
-		startMilli = sevenDaysAgo
+	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Unix()
+	startSec := since.Unix()
+	if startSec < sevenDaysAgo {
+		startSec = sevenDaysAgo
 	}
 	
-	if startMilli >= nowMilli {
+	if startSec >= nowSec {
 		return nil
 	}
 
 	query := url.Values{
 		"container_id_type": {"chat"},
 		"container_id":      {chatID},
-		"start_time":        {strconv.FormatInt(startMilli, 10)},
-		"end_time":          {strconv.FormatInt(nowMilli, 10)},
+		"start_time":        {strconv.FormatInt(startSec, 10)},
+		"end_time":          {strconv.FormatInt(nowSec, 10)},
 		"page_size":         {"50"},
+		"sort_type":         {"ByCreateTimeAsc"},
 	}
 	
 	// Use Tenant Token as recommended by the documentation for server-side sync
@@ -299,13 +300,16 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 			if content == "" { content = placeholder } else { content = placeholder + " " + content }
 		}
 
+		// CreateTime from Lark API is a string in milliseconds
 		ts, _ := strconv.ParseInt(msg.CreateTime, 10, 64)
+		timestamp := time.UnixMilli(ts)
+
 		results = append(results, types.Message{
 			ID:        msg.MessageId,
 			Source:    "lark",
 			Sender:    msg.Sender.Id,
 			Content:   content,
-			Timestamp: time.UnixMilli(ts),
+			Timestamp: timestamp,
 			IsPrivate: isPrivate,
 			ChatName:  chatName,
 		})
