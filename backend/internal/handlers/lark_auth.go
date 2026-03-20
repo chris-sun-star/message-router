@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/admin/message-router/internal/config"
@@ -39,10 +40,15 @@ func GetLarkAuthURL(c *gin.Context) {
 	}
 
 	baseURL := getLarkBaseURL()
-	// Explicitly request required scopes including operator ones
+	// Use modern scopes, remove deprecated contact:contact:readonly
 	scopes := "im:message:readonly im:message.group_msg:readonly im:message.p2p_msg:readonly im:chat:readonly im:chat im:chat:read im:chat:operate_as_owner contact:user.base:readonly contact:user.id:readonly"
+	
+	// Use %20 instead of + for scope separation as some Feishu versions are picky
+	encodedScopes := url.QueryEscape(scopes)
+	encodedScopes = strings.ReplaceAll(encodedScopes, "+", "%20")
+
 	authURL := fmt.Sprintf("%s/open-apis/authen/v1/index?app_id=%s&redirect_uri=%s&state=lark-auth&scope=%s", 
-		baseURL, appID, url.QueryEscape(redirectURI), url.QueryEscape(scopes))
+		baseURL, appID, url.QueryEscape(redirectURI), encodedScopes)
 
 	c.JSON(http.StatusOK, LarkAuthURLResponse{URL: authURL})
 }

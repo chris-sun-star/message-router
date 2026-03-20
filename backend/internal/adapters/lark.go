@@ -54,27 +54,39 @@ func (l *LarkAdapter) GetID() string {
 	return "lark"
 }
 
-func (l *LarkAdapter) rawRequest(ctx context.Context, method, path string, body interface{}, query url.Values) (json.RawMessage, error) {
+func (l *LarkAdapter) rawRequest(ctx context.Context, method, path string, body interface{}, query url.Values, useTenantToken bool) (json.RawMessage, error) {
 	fullURL := fmt.Sprintf("%s/open-apis/%s", l.baseURL, path)
 	if len(query) > 0 {
 		fullURL += "?" + query.Encode()
 	}
 
-	var bodyReader *bytes.Buffer
+	var bodyBytes []byte
 	if body != nil {
-		jsonBody, _ := json.Marshal(body)
-		bodyReader = bytes.NewBuffer(jsonBody)
-	} else {
-		bodyReader = bytes.NewBuffer([]byte{})
+		bodyBytes, _ = json.Marshal(body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
+	token := l.tokenData.AccessToken
+	if useTenantToken {
+		tenantTokenResp, err := l.client.GetTenantAccessTokenBySelfBuiltApp(ctx, &larkcore.SelfBuiltTenantAccessTokenReq{
+			AppID:     l.appID,
+			AppSecret: l.appSecret,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !tenantTokenResp.Success() {
+			return nil, fmt.Errorf("failed to get tenant token: %d %s", tenantTokenResp.Code, tenantTokenResp.Msg)
+		}
+		token = tenantTokenResp.TenantAccessToken
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+l.tokenData.AccessToken)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -89,17 +101,19 @@ func (l *LarkAdapter) rawRequest(ctx context.Context, method, path string, body 
 		Data json.RawMessage `json:"data"`
 	}
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	// Restore body for decoder
-	resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		fmt.Printf("Lark DEBUG: Failed to decode response: %s\n", string(bodyBytes))
+	respBody, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		fmt.Printf("Lark DEBUG: Failed to decode response: %s\n", string(respBody))
 		return nil, err
 	}
 
 	if result.Code != 0 {
-		fmt.Printf("Lark DEBUG ERROR: Path: %s, Response: %s\n", path, string(bodyBytes))
+		// Fallback to Tenant Token if User Token fails with permission error
+		if !useTenantToken && (result.Code == 9499 || result.Code == 40001 || result.Code == 12070 || result.Code == 99991672) {
+			fmt.Printf("Lark: User token failed (%d), retrying with Tenant token for %s\n", result.Code, path)
+			return l.rawRequest(ctx, method, path, body, query, true)
+		}
+		fmt.Printf("Lark DEBUG ERROR: Path: %s, Response: %s\n", path, string(respBody))
 		return nil, fmt.Errorf("lark error: %d %s", result.Code, result.Msg)
 	}
 
@@ -180,19 +194,17 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 	var messages []types.Message
 
 	// 0. Get self ID
-	selfData, err := l.rawRequest(ctx, "GET", "authen/v1/user_info", nil, nil)
+	selfData, err := l.rawRequest(ctx, "GET", "authen/v1/user_info", nil, nil, false)
 	var selfID string
 	if err == nil {
 		var s struct { UserId string `json:"user_id"` }
 		json.Unmarshal(selfData, &s)
 		selfID = s.UserId
 		fmt.Printf("Lark: Authenticated as user ID %s\n", selfID)
-	} else {
-		fmt.Printf("Lark: UserInfo error: %v\n", err)
 	}
 
 	// 1. Fetch Groups
-	groupData, err := l.rawRequest(ctx, "GET", "im/v1/chats", nil, nil)
+	groupData, err := l.rawRequest(ctx, "GET", "im/v1/chats", nil, nil, false)
 	if err == nil {
 		var g struct { 
 			Items []struct { 
@@ -201,17 +213,14 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			} `json:"items"` 
 		}
 		json.Unmarshal(groupData, &g)
-		fmt.Printf("Lark: Found %d group chats\n", len(g.Items))
 		for _, item := range g.Items {
 			msgs := l.fetchFromChat(ctx, item.ChatId, item.Name, false, selfID, since)
 			messages = append(messages, msgs...)
 		}
-	} else {
-		fmt.Printf("Lark: Chat.List error: %v\n", err)
 	}
 
 	// 2. Fetch P2P via Contacts
-	contactData, err := l.rawRequest(ctx, "GET", "contact/v3/users", nil, url.Values{"department_id": {"0"}})
+	contactData, err := l.rawRequest(ctx, "GET", "contact/v3/users", nil, url.Values{"department_id": {"0"}}, false)
 	if err == nil {
 		var c struct { 
 			Items []struct { 
@@ -220,28 +229,22 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 			} `json:"items"` 
 		}
 		json.Unmarshal(contactData, &c)
-		fmt.Printf("Lark: Found %d contacts\n", len(c.Items))
 		for _, user := range c.Items {
 			if user.OpenId == "" || user.OpenId == selfID { continue }
 			
 			p2pBody := map[string]interface{}{
 				"user_id_list": []string{user.OpenId},
 			}
-			p2pData, err := l.rawRequest(ctx, "POST", "im/v1/chats", p2pBody, url.Values{"user_id_type": {"open_id"}})
+			p2pData, err := l.rawRequest(ctx, "POST", "im/v1/chats", p2pBody, url.Values{"user_id_type": {"open_id"}}, false)
 			if err == nil {
 				var p struct { ChatId string `json:"chat_id"` }
 				json.Unmarshal(p2pData, &p)
 				if p.ChatId != "" {
-					fmt.Printf("Lark: Fetching from P2P chat with %s (%s)\n", user.Name, p.ChatId)
 					msgs := l.fetchFromChat(ctx, p.ChatId, user.Name, true, selfID, since)
 					messages = append(messages, msgs...)
 				}
-			} else {
-				fmt.Printf("Lark: CreateChat error for contact %s: %v\n", user.Name, err)
 			}
 		}
-	} else {
-		fmt.Printf("Lark: User.List error: %v\n", err)
 	}
 
 	// Resolve Names
@@ -252,7 +255,7 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 		for id := range senderIDs { ids = append(ids, id) }
 		
 		nameReqBody := map[string]interface{}{ "user_ids": ids }
-		nameData, err := l.rawRequest(ctx, "POST", "contact/v3/users/batch_get", nameReqBody, url.Values{"user_id_type": {"open_id"}})
+		nameData, err := l.rawRequest(ctx, "POST", "contact/v3/users/batch_get", nameReqBody, url.Values{"user_id_type": {"open_id"}}, false)
 		if err == nil {
 			var n struct { 
 				Items []struct { 
@@ -275,16 +278,14 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 }
 
 func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, selfID string, since time.Time) []types.Message {
-	fmt.Printf("Lark: Fetching messages for chat %s (ID: %s) since %s\n", chatName, chatID, since.Format(time.RFC3339))
 	query := url.Values{
 		"container_id_type": {"chat"},
 		"container_id":      {chatID},
 		"start_time":        {strconv.FormatInt(since.UnixMilli()+1, 10)},
 	}
 	
-	msgData, err := l.rawRequest(ctx, "GET", "im/v1/messages", nil, query)
+	msgData, err := l.rawRequest(ctx, "GET", "im/v1/messages", nil, query, false)
 	if err != nil {
-		fmt.Printf("Lark: Message.List error for %s: %v\n", chatID, err)
 		return nil
 	}
 
@@ -298,10 +299,6 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 		} `json:"items"`
 	}
 	json.Unmarshal(msgData, &m)
-
-	if len(m.Items) > 0 {
-		fmt.Printf("Lark: Found %d raw messages in chat %s\n", len(m.Items), chatName)
-	}
 
 	var results []types.Message
 	for _, msg := range m.Items {
