@@ -278,10 +278,19 @@ func (l *LarkAdapter) FetchMessages(ctx context.Context, since time.Time) ([]typ
 }
 
 func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName string, isPrivate bool, selfID string, since time.Time) []types.Message {
+	nowMilli := time.Now().UnixMilli()
+	startMilli := since.UnixMilli() + 1
+	
+	// Safety check: start_time cannot be later than end_time
+	if startMilli >= nowMilli {
+		return nil
+	}
+
 	query := url.Values{
 		"container_id_type": {"chat"},
 		"container_id":      {chatID},
-		"start_time":        {strconv.FormatInt(since.UnixMilli()+1, 10)},
+		"start_time":        {strconv.FormatInt(startMilli, 10)},
+		"end_time":          {strconv.FormatInt(nowMilli, 10)},
 	}
 	
 	msgData, err := l.rawRequest(ctx, "GET", "im/v1/messages", nil, query, false)
