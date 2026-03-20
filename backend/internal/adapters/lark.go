@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"strconv"
 	"time"
 
@@ -265,16 +266,17 @@ func (l *LarkAdapter) fetchFromChat(ctx context.Context, chatID string, chatName
 		"end_time":          {strconv.FormatInt(nowMilli, 10)},
 	}
 	
-	// We try with User Token first. If it fails with 40001 (unauthorized msg ability), 
-	// it means the Bot must be in the group to read messages even if we use User Token.
+	// We try with User Token first.
 	msgData, err := l.rawRequest(ctx, "GET", "im/v1/messages", nil, query, false)
 	if err != nil {
-		// Retry with Tenant Token (Bot identity) ONLY if it's a group chat
-		// because the bot cannot be in a private P2P chat between two other people.
-		if !isPrivate {
+		// If it's a group chat (IDs starting with oc_), try with Tenant Token (Bot identity)
+		if strings.HasPrefix(chatID, "oc_") {
 			msgData, err = l.rawRequest(ctx, "GET", "im/v1/messages", nil, query, true)
 		}
+		
 		if err != nil {
+			// If both failed, just return nil to skip this chat silently
+			// This happens when the bot isn't in the group or user msg ability is restricted
 			return nil
 		}
 	}
