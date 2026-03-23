@@ -8,6 +8,8 @@ RUN npm run build
 
 # Stage 2: Build the backend
 FROM golang:1.25 AS backend-builder
+ARG GOPROXY=https://goproxy.io,direct
+ENV GOPROXY=$GOPROXY
 WORKDIR /app
 # Copy go mod files
 COPY backend/go.mod backend/go.sum ./backend/

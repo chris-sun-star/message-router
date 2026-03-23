@@ -25,7 +25,7 @@ build-backend:
 	mkdir -p $(BUILD_DIR)
 	rm -rf $(BACKEND_DIR)/dist
 	cp -r $(FRONTEND_DIR)/dist $(BACKEND_DIR)/dist
-	cd $(BACKEND_DIR) && go build -o ../$(BUILD_DIR)/$(BINARY_NAME) $(MAIN_FILE)
+	cd $(BACKEND_DIR) && GOPROXY=$(GOPROXY) go build -o ../$(BUILD_DIR)/$(BINARY_NAME) $(MAIN_FILE)
 
 # Build both
 build-all: build-frontend build-backend
@@ -51,5 +51,6 @@ dev-frontend:
 	cd $(FRONTEND_DIR) && npm run dev
 
 # Docker build
+GOPROXY ?= https://goproxy.io,direct
 docker-build:
-	docker build -t message-router:latest .
+	docker build --build-arg GOPROXY=$(GOPROXY) -t message-router:latest .
