@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Trash2, Send, Slack, SendHorizontal, MessageSquare, Save, Plus, X, Inbox, Share2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { apiFetch } from "../lib/api";
 
 const Channels = () => {
   const [credentials, setCredentials] = useState<any[]>([]);
@@ -20,20 +21,18 @@ const Channels = () => {
   const [telegramStep, setTelegramStep] = useState<"phone" | "code">("phone");
 
   const inputPlatforms = [
-    { id: "slack", label: "Slack", icon: Slack, color: "text-purple-600", bg: "bg-purple-50" },
-    { id: "telegram", label: "Telegram", icon: SendHorizontal, color: "text-sky-500", bg: "bg-sky-50" },
-    { id: "lark", label: "Lark", icon: MessageSquare, color: "text-emerald-500", bg: "bg-emerald-50" },
+    { id: "telegram", label: "Telegram", icon: SendHorizontal, color: "text-sky-500", bg: "bg-sky-50", disabled: false },
+    { id: "slack", label: "Slack", icon: Slack, color: "text-slate-400", bg: "bg-slate-50", disabled: true, tag: "Coming Soon" },
+    { id: "lark", label: "Lark", icon: MessageSquare, color: "text-slate-400", bg: "bg-slate-50", disabled: true, tag: "Coming Soon" },
   ];
 
   const outputPlatforms = [
-    { id: "dingtalk", label: "DingTalk", icon: Send, color: "text-blue-500", bg: "bg-blue-50" },
+    { id: "dingtalk", label: "DingTalk", icon: Send, color: "text-blue-500", bg: "bg-blue-50", disabled: false },
   ];
 
   const fetchCredentials = async () => {
     try {
-      const response = await fetch("/api/credentials", {
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
-      });
+      const response = await apiFetch("/api/credentials");
       if (response.ok) setCredentials(await response.json());
     } catch (err) {
       console.error("Failed to fetch credentials:", err);
@@ -43,11 +42,10 @@ const Channels = () => {
   const completeLarkAuth = async (code: string, name: string) => {
     setIsLoading(true);
     try {
-      const response = await fetch("/api/lark/auth/callback", {
+      const response = await apiFetch("/api/lark/auth/callback", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json", 
-          "Authorization": `Bearer ${localStorage.getItem("token")}` 
         },
         body: JSON.stringify({ code, name }),
       });
@@ -72,9 +70,7 @@ const Channels = () => {
       localStorage.setItem('lark_pending_name', channelName);
       
       const redirectUri = window.location.origin + window.location.pathname;
-      const response = await fetch(`/api/lark/auth/url?redirect_uri=${encodeURIComponent(redirectUri)}`, {
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
-      });
+      const response = await apiFetch(`/api/lark/auth/url?redirect_uri=${encodeURIComponent(redirectUri)}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Failed to get Lark auth URL");
       
@@ -110,7 +106,7 @@ const Channels = () => {
     setTelegramPhone("");
     setTelegramCode("");
     setTelegramStep("phone");
-    setActivePlatform(activeTab === "input" ? "slack" : "dingtalk");
+    setActivePlatform(activeTab === "input" ? "telegram" : "dingtalk");
     setIsDrawerOpen(true);
     setMessage(null);
   };
@@ -119,9 +115,9 @@ const Channels = () => {
     setIsLoading(true);
     setMessage(null);
     try {
-      const response = await fetch("/api/telegram/auth/send-code", {
+      const response = await apiFetch("/api/telegram/auth/send-code", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: telegramPhone }),
       });
       const data = await response.json();
@@ -144,9 +140,9 @@ const Channels = () => {
     setIsLoading(true);
     setMessage(null);
     try {
-      const response = await fetch("/api/telegram/auth/verify-code", {
+      const response = await apiFetch("/api/telegram/auth/verify-code", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: telegramCode, name: channelName }),
       });
       const data = await response.json();
@@ -175,9 +171,9 @@ const Channels = () => {
     else if (activePlatform === "dingtalk") tokenValue = dingtalkWebhook;
 
     try {
-      const response = await fetch("/api/credentials", {
+      const response = await apiFetch("/api/credentials", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: channelName, source_type: activePlatform, token: tokenValue }),
       });
       if (!response.ok) throw new Error("Failed to save channel");
@@ -193,9 +189,8 @@ const Channels = () => {
 
   const handleDelete = async (id: number) => {
     if (!confirm("Delete this channel?")) return;
-    await fetch(`/api/credentials/${id}`, {
+    await apiFetch(`/api/credentials/${id}`, {
       method: "DELETE",
-      headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
     });
     fetchCredentials();
   };
@@ -311,13 +306,25 @@ const Channels = () => {
                   {(activeTab === "input" ? inputPlatforms : outputPlatforms).map(p => (
                     <button
                       key={p.id}
-                      onClick={() => setActivePlatform(p.id)}
-                      className={`flex items-center gap-3 p-4 rounded-3xl border-2 transition-all duration-200 ${
-                        activePlatform === p.id ? "border-blue-600 bg-blue-50/50 text-blue-700 shadow-sm" : "border-slate-100 hover:border-slate-200 text-slate-600"
+                      onClick={() => !p.disabled && setActivePlatform(p.id)}
+                      disabled={p.disabled}
+                      className={`flex flex-col items-start gap-1 p-4 rounded-3xl border-2 transition-all duration-200 ${
+                        activePlatform === p.id 
+                          ? "border-blue-600 bg-blue-50/50 text-blue-700 shadow-sm" 
+                          : p.disabled 
+                            ? "border-slate-50 bg-slate-50/30 text-slate-300 cursor-not-allowed" 
+                            : "border-slate-100 hover:border-slate-200 text-slate-600"
                       }`}
                     >
-                      <p.icon className={`w-5 h-5 ${activePlatform === p.id ? "text-blue-600" : "text-slate-400"}`} />
-                      <span className="font-bold text-sm">{p.label}</span>
+                      <div className="flex items-center gap-3 w-full">
+                        <p.icon className={`w-5 h-5 ${activePlatform === p.id ? "text-blue-600" : p.disabled ? "text-slate-300" : "text-slate-400"}`} />
+                        <span className="font-bold text-sm">{p.label}</span>
+                      </div>
+                      {(p as any).tag && (
+                        <span className="text-[9px] font-black uppercase tracking-wider bg-slate-200 text-slate-500 px-2 py-0.5 rounded-full mt-1">
+                          {(p as any).tag}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>

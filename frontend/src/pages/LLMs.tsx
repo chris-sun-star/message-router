@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Trash2, Save, Plus, X, AlertCircle, CheckCircle2, Bot, Cpu } from "lucide-react";
+import { apiFetch } from "../lib/api";
 
 const LLMs = () => {
   const [llmConfigs, setLlmConfigs] = useState<any[]>([]);
@@ -15,9 +16,7 @@ const LLMs = () => {
 
   const fetchLLMs = async () => {
     try {
-      const response = await fetch("/api/llm-configs", {
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
-      });
+      const response = await apiFetch("/api/llm-configs");
       if (response.ok) setLlmConfigs(await response.json());
     } catch (err) {
       console.error("Failed to fetch LLMs:", err);
@@ -32,9 +31,9 @@ const LLMs = () => {
     e.preventDefault();
     setIsLoading(true);
     try {
-      const response = await fetch("/api/llm-configs", {
+      const response = await apiFetch("/api/llm-configs", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${localStorage.getItem("token")}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: llmName, provider: llmProvider, model: llmModel, api_key: llmKey }),
       });
       if (!response.ok) throw new Error("Failed to save LLM config");
@@ -50,10 +49,9 @@ const LLMs = () => {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Delete this configuration?")) return;
-    await fetch(`/api/llm-configs/${id}`, {
+    if (!confirm("Delete this AI model?")) return;
+    await apiFetch(`/api/llm-configs/${id}`, {
       method: "DELETE",
-      headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
     });
     fetchLLMs();
   };

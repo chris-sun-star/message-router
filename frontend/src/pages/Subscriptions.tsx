@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Plus, Trash2, Layers, AlertCircle, CheckCircle2, Clock, ArrowRight, Bot } from "lucide-react";
+import { apiFetch } from "../lib/api";
 
 const Subscriptions = () => {
   const [isLoading, setIsLoading] = useState(false);
@@ -18,11 +19,10 @@ const Subscriptions = () => {
 
   const fetchConfig = async () => {
     try {
-      const headers = { "Authorization": `Bearer ${localStorage.getItem("token")}` };
       const [credsRes, subsRes, llmRes] = await Promise.all([
-        fetch("/api/credentials", { headers }),
-        fetch("/api/subscriptions", { headers }),
-        fetch("/api/llm-configs", { headers })
+        apiFetch("/api/credentials"),
+        apiFetch("/api/subscriptions"),
+        apiFetch("/api/llm-configs")
       ]);
       
       if (credsRes.ok) setCredentials(await credsRes.json());
@@ -41,11 +41,10 @@ const Subscriptions = () => {
     e.preventDefault();
     setIsLoading(true);
     try {
-      const response = await fetch("/api/subscriptions", {
+      const response = await apiFetch("/api/subscriptions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${localStorage.getItem("token")}`
         },
         body: JSON.stringify({
           source_credential_id: parseInt(selectedSource),
@@ -77,9 +76,8 @@ const Subscriptions = () => {
   const handleDeleteSub = async (id: number) => {
     if (!confirm("Are you sure you want to delete this subscription?")) return;
     try {
-      const response = await fetch(`/api/subscriptions/${id}`, {
+      const response = await apiFetch(`/api/subscriptions/${id}`, {
         method: "DELETE",
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token")}` }
       });
       if (response.ok) fetchConfig();
     } catch (err) {
@@ -146,7 +144,10 @@ const Subscriptions = () => {
                 >
                   <option value="">Choose an input channel...</option>
                   {inputChannels.map(c => (
-                    <option key={c.id} value={c.id}>{c.name} ({c.source_type.toUpperCase()})</option>
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.source_type.toUpperCase()})
+                      {['slack', 'lark'].includes(c.source_type) ? ' (Coming Soon)' : ''}
+                    </option>
                   ))}
                 </select>
               </div>

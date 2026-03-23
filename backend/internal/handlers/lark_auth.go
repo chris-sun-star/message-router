@@ -134,10 +134,12 @@ func HandleLarkCallback(c *gin.Context) {
 		AccessToken  string    `json:"access_token"`
 		RefreshToken string    `json:"refresh_token"`
 		ExpiresAt    time.Time `json:"expires_at"`
+		OpenID       string    `json:"open_id"`
 	}{
 		AccessToken:  larkResp.Data.AccessToken,
 		RefreshToken: larkResp.Data.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(larkResp.Data.ExpiresIn) * time.Second),
+		OpenID:       larkResp.Data.OpenId,
 	}
 
 	tokenDataJSON, _ := json.Marshal(tokenData)

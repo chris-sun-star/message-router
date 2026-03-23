@@ -144,7 +144,7 @@ func (o *Orchestrator) getLarkBaseURL() string {
 
 func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subscription) {
 	// Create a sub-context with timeout for this specific sync task
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	log.Printf("Processing subscription %d for user %d", sub.ID, sub.UserID)
@@ -239,7 +239,7 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 		var sb strings.Builder
 		sb.WriteString("### New Messages List\n\n")
 		for _, m := range messages {
-			if m.Source == "telegram" {
+			if m.Source == "telegram" || m.Source == "lark" {
 				if m.IsPrivate {
 					sb.WriteString(fmt.Sprintf("- **%s** said: %s\n", m.Sender, m.Content))
 				} else {
