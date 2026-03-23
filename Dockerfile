@@ -1,8 +1,10 @@
 # Stage 1: Build the frontend
 FROM node:20 AS frontend-builder
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm install --force
+RUN npm config set registry $NPM_REGISTRY && \
+    npm install --legacy-peer-deps
 COPY frontend/ ./
 RUN npm run build
 
