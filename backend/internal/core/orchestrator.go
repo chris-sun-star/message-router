@@ -237,13 +237,12 @@ func (o *Orchestrator) processSubscription(ctx context.Context, sub models.Subsc
 	} else {
 		// Simple formatting
 		var sb strings.Builder
-		sb.WriteString("### New Messages List\n\n")
 		for _, m := range messages {
 			if m.Source == "telegram" || m.Source == "lark" {
 				if m.IsPrivate {
-					sb.WriteString(fmt.Sprintf("- **%s** said: %s\n", m.Sender, m.Content))
+					sb.WriteString(fmt.Sprintf("- **%s** from **%s** said: %s\n", m.Sender, m.Source, m.Content))
 				} else {
-					sb.WriteString(fmt.Sprintf("- **%s** mentioned you in group **%s**: %s\n", m.Sender, m.ChatName, m.Content))
+					sb.WriteString(fmt.Sprintf("- **%s** mentioned you in **%s** group **%s**: %s\n", m.Sender, m.Source, m.ChatName, m.Content))
 				}
 			} else {
 				sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", m.Sender, m.Source, m.Content))

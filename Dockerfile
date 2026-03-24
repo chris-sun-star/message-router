@@ -27,7 +27,10 @@ RUN cd backend && CGO_ENABLED=0 GOOS=linux go build -o /message-router main.go
 
 # Stage 3: Final image
 FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && apt-get install -y ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+COPY --from=backend-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=backend-builder /usr/share/zoneinfo /usr/share/zoneinfo
+
 WORKDIR /root/
 COPY --from=backend-builder /message-router .
 
