@@ -20,7 +20,7 @@ COPY backend/ ./backend/
 COPY --from=frontend-builder /app/frontend/dist ./backend/dist
 
 # Build the binary
-RUN cd backend && CGO_ENABLED=0 GOOS=linux go build -o /message-router main.go
+RUN cd backend && CGO_ENABLED=1 GOOS=linux go build -o /message-router main.go
 
 # Stage 3: Final image
 FROM ubuntu:24.04
