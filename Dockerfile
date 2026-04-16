@@ -13,9 +13,6 @@ FROM golang:1.25 AS backend-builder
 ARG GOPROXY=https://goproxy.io,direct
 ENV GOPROXY=$GOPROXY
 WORKDIR /app
-# Copy go mod files
-COPY backend/go.mod backend/go.sum ./backend/
-RUN cd backend && go mod download
 
 # Copy backend source
 COPY backend/ ./backend/
