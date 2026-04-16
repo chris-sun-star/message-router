@@ -43,3 +43,5 @@ jobs:
           tags: |
             ${{ vars.DOCKER_PUSH_BASE }}/message-router:${{ steps.set_version_vars.outputs.version }}
             ${{ vars.DOCKER_PUSH_BASE }}/message-router:latest
+          build-args: |
+            GOPROXY=https://proxy.golang.org,direct
