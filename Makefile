@@ -51,7 +51,8 @@ dev-frontend:
 	cd $(FRONTEND_DIR) && npm run dev
 
 # Docker build
+TAG ?= latest
 GOPROXY ?= https://goproxy.io,direct
 NPM_REGISTRY ?= https://registry.npmmirror.com
 docker-build:
-	docker build --build-arg GOPROXY=$(GOPROXY) --build-arg NPM_REGISTRY=$(NPM_REGISTRY) -t message-router:latest .
+	docker build --build-arg GOPROXY=$(GOPROXY) --build-arg NPM_REGISTRY=$(NPM_REGISTRY) -t message-router:$(TAG) .
